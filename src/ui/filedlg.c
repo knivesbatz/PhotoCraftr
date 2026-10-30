@@ -262,6 +262,26 @@ static void file_change(Dlg *d, int id, int code)
     }
 }
 
+/* Up One Level / Create New Folder: flat toolbar buttons with icons (Win95). */
+static int g_tb_down;
+
+static void toolbtn_paint(Dlg *d, int id, HDC dc, const RECT *r)
+{
+    (void)d;
+    w95_draw_icon_button(dc, r, id == 101 ? PC_ICON_UP_FOLDER : PC_ICON_NEW_FOLDER, g_tb_down == id ? 2 : 1, 0);
+}
+
+static void toolbtn_mouse(Dlg *d, int id, UINT msg, int x, int y, WPARAM wp)
+{
+    (void)wp;
+    if (msg == WM_LBUTTONDOWN) { g_tb_down = id; dlg_redraw(d, id); }
+    else if (msg == WM_LBUTTONUP && g_tb_down == id) {
+        g_tb_down = 0;
+        dlg_redraw(d, id);
+        if (x >= 0 && y >= 0 && x < 24 && y < 22) file_change(d, id, DLG_CODE_CLICK);
+    }
+}
+
 static int run_file_dialog(char *path, int n, int save, int *fmt, int layered)
 {
     Dlg *d;
@@ -283,13 +303,8 @@ static int run_file_dialog(char *path, int n, int save, int *fmt, int layered)
     d->draw_item = file_draw;
     dlg_label(d, 10, 15, 60, 16, save ? "Save &in:" : "Look &in:");
     dlg_combo(d, 100, 70, 12, 230, 20, NULL, 0, 0);
-    {
-        HWND up = dlg_button(d, 101, 306, 11, 24, 22, "", 0);
-        HWND nf = dlg_button(d, 102, 334, 11, 24, 22, "", 0);
-        /* Glyph buttons: label them with the classic up-arrow / star text if icons aren't available. */
-        SetWindowTextA(up, "\x5E");
-        SetWindowTextA(nf, "*");
-    }
+    dlg_custom(d, 101, 306, 11, 24, 22, toolbtn_paint, toolbtn_mouse);
+    dlg_custom(d, 102, 332, 11, 24, 22, toolbtn_paint, toolbtn_mouse);
     dlg_list_owner(d, 110, 10, 40, W - 20, 158);
     dlg_label(d, 10, 210, 70, 16, "File &name:");
     dlg_edit(d, 120, 90, 207, 240, 20, save ? plat_basename(path) : "", 0);

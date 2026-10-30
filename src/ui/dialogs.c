@@ -137,8 +137,8 @@ int dlg_new(int *w, int *h, double *dpi, int *mode, int *fill, char *name, int n
     if (!d) return 0;
     dlg_label(d, 12, 15, 40, 16, "Name:");
     dlg_edit(d, 100, 60, 12, 220, 20, name[0] ? name : "Untitled", 0);
-    dlg_group(d, 10, 42, 285, 118, "Image Size: ");
-    dlg_label_id(d, 110, 90, 42, 120, 14, "", 0);
+    dlg_group(d, 10, 42, 285, 118, "");
+    dlg_label_id(d, 110, 18, 42, 150, 14, "", 0);
     dlg_label(d, 22, 66, 60, 16, "Width:");
     dlg_edit(d, 101, 90, 63, 70, 20, "", DLG_NUMBER | DLG_DECIMAL);
     dlg_label(d, 22, 92, 60, 16, "Height:");
