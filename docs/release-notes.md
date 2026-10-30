@@ -1,5 +1,5 @@
-Since 0.1.0 (not yet released)
-==============================
+PhotoCraft Classic 0.2.0
+========================
 
 - Adjustment layers: Brightness/Contrast, Levels, Curves, Color Balance,
   Hue/Saturation, Channel Mixer, Invert, Threshold and Posterize, the types
@@ -16,6 +16,16 @@ Since 0.1.0 (not yet released)
   adjustment blocks; the flattened image in the file includes them.
 - Posterize and Channel Mixer now preview live; typed values in Levels
   preview too.
+- 1998 output rules: BMP, Targa, GIF, PNG, TIFF and JPEG save only at the
+  colour depths a 1998 game studio could produce (8-bit palette, 16-bit
+  high colour, 24-bit, and 32-bit for Targa/PNG). Each format has a
+  consistent Options dialog with a 100% before/after preview, Photoshop
+  5-style palettes and dithers, and a magenta colour key for sprites.
+  PNG is the one modern exception (full alpha, PNG-8 with partial alpha).
+  New Image > Mode > Indexed Color.
+- Open and Save As use the system file dialog (the Explorer dialog on
+  Windows 10). Preferences > General > "Use classic Open and Save
+  dialogs" brings back the Windows 95-style one.
 
 PhotoCraft Classic 0.1.0
 ========================
@@ -47,13 +57,6 @@ What's in it
 - Filters: Blur, Sharpen, Noise, Stylize, Pixelate, Distort, Render and
   Other families (31 filters), with previews.
 - Files: layered Photoshop PSD, BMP, GIF, JPEG, PNG, TIFF and Targa.
-- 1998 output rules: BMP, Targa, GIF, PNG, TIFF and JPEG save only at the
-  colour depths a 1998 game studio could produce (8-bit palette, 16-bit
-  high colour, 24-bit, and 32-bit for Targa/PNG). Each format has a
-  consistent Options dialog with a 100% before/after preview, Photoshop
-  5-style palettes and dithers, and a magenta colour key for sprites.
-  PNG is the one modern exception (full alpha, PNG-8 with partial alpha).
-  New Image > Mode > Indexed Color.
 - Built-in updater (Help > Check for Updates) with signed manifests and a
   bundled TLS stack; Windows Installer package and setup program.
 
