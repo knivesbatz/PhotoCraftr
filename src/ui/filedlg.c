@@ -1,11 +1,13 @@
 /*
- * Open and Save As dialogs in the Windows 95 common-dialog layout, drawn
- * by the application itself (the system dialog would be the Windows 10
- * Explorer dialog).  Look in / Save in drop-down with drives, Up One Level,
- * a file list with folder and image icons, File name, Files of type, and
- * Photoshop 5.0's File Size readout.
+ * Open and Save As.  By default these are the system's common dialogs
+ * (the Explorer dialog of whichever Windows is running).  Preferences >
+ * "Use classic Open and Save dialogs" switches to the built-in Windows 95
+ * common-dialog layout drawn by the application itself: Look in / Save in
+ * drop-down with drives, Up One Level, a file list with folder and image
+ * icons, File name, Files of type, and Photoshop 5.0's File Size readout.
  */
 #include "dlg.h"
+#include <commdlg.h>
 
 typedef struct { char name[260]; int dir; DWORD size; } FEntry;
 
@@ -335,9 +337,133 @@ static int run_file_dialog(char *path, int n, int save, int *fmt, int layered)
     return rc == IDOK && c.result[0];
 }
 
-int dlg_open_file(char *path, int n) { return run_file_dialog(path, n, 0, NULL, 0); }
+/* ---- System common dialog ---------------------------------------------- */
+
+typedef BOOL (WINAPI *GetFileNameFn)(OPENFILENAMEA *);
+
+/* Appends "label\0pattern\0" to a double-NUL-terminated filter list. */
+static void add_filter(char *buf, size_t cap, size_t *len, const char *label, const char *pattern)
+{
+    size_t a = strlen(label) + 1, b = strlen(pattern) + 1;
+    if (*len + a + b + 1 > cap) return;
+    memcpy(buf + *len, label, a); *len += a;
+    memcpy(buf + *len, pattern, b); *len += b;
+    buf[*len] = 0;
+}
+
+/* "*.psd;*.pdd" for a format, from the extension table in pcio. */
+static void format_patterns(int fmt, char *out, size_t cap)
+{
+    static const char *const exts[] = { "psd", "pdd", "bmp", "dib", "rle", "gif", "jpg", "jpeg", "jpe",
+                                        "png", "tif", "tiff", "tga", "vda", "icb", "vst" };
+    char name[16];
+    size_t k;
+    out[0] = 0;
+    for (k = 0; k < sizeof exts / sizeof exts[0]; k++) {
+        pc_snprintf(name, sizeof name, "x.%s", exts[k]);
+        if (fmt ? pc_format_from_ext(name) != fmt : pc_format_from_ext(name) == PC_FMT_UNKNOWN) continue;
+        if (out[0]) pc_strlcat(out, ";", cap);
+        pc_strlcat(out, "*.", cap);
+        pc_strlcat(out, exts[k], cap);
+    }
+}
+
+/* Returns 1 accepted, 0 cancelled, -1 when the system dialog is unavailable. */
+static int system_file_dialog(char *path, int n, int save, int *fmt)
+{
+    static HMODULE comdlg;
+    GetFileNameFn fn;
+    OPENFILENAMEA ofn;
+    char filter[1024], pat[128], dir[260], file[260];
+    size_t len = 0;
+    int k, ok;
+    DWORD ver = GetVersion();
+    if (!comdlg) comdlg = LoadLibraryA("comdlg32.dll");
+    if (!comdlg) return -1;
+    fn = (GetFileNameFn)(void *)GetProcAddress(comdlg, save ? "GetSaveFileNameA" : "GetOpenFileNameA");
+    if (!fn) return -1;
+
+    filter[0] = filter[1] = 0;
+    if (!save) {
+        format_patterns(0, pat, sizeof pat);
+        add_filter(filter, sizeof filter, &len, "All Formats", pat);
+    }
+    for (k = 1; k < PC_FMT_COUNT; k++) {
+        format_patterns(k, pat, sizeof pat);
+        add_filter(filter, sizeof filter, &len, pc_format_name(k), pat);
+    }
+    if (!save) add_filter(filter, sizeof filter, &len, "All Files (*.*)", "*.*");
+
+    /* Start folder and file name from the proposed path. */
+    {
+        const char *b = plat_basename(path);
+        size_t dl = (size_t)(b - path);
+        dir[0] = 0;
+        if (dl > 0 && dl < sizeof dir) { memcpy(dir, path, dl); dir[dl] = 0; }
+        pc_strlcpy(file, save ? b : "", sizeof file);
+    }
+
+    memset(&ofn, 0, sizeof ofn);
+    /* Windows 95/98/ME and NT 4 reject the larger Windows 2000 structure. */
+    ofn.lStructSize = (LOBYTE(LOWORD(ver)) >= 5 && !(ver & 0x80000000u)) ? sizeof ofn : OPENFILENAME_SIZE_VERSION_400A;
+    ofn.hwndOwner = g_app.main;
+    ofn.lpstrFilter = filter;
+    ofn.nFilterIndex = save ? (DWORD)(fmt && *fmt > 0 && *fmt < PC_FMT_COUNT ? *fmt : PC_FMT_PSD) : 1;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = sizeof file;
+    ofn.lpstrInitialDir = dir[0] ? dir : NULL;
+    ofn.lpstrDefExt = save ? pc_format_ext((int)ofn.nFilterIndex) : NULL;
+    ofn.Flags = OFN_EXPLORER | OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
+                (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+
+    /* Let the dialog use the current Windows look (the rest of the program
+     * keeps the classic one). */
+    w95_allow_themes(1);
+    ok = fn(&ofn);
+    w95_allow_themes(0);
+    if (!ok) {
+        typedef DWORD (WINAPI *ErrFn)(void);
+        ErrFn err = (ErrFn)(void *)GetProcAddress(comdlg, "CommDlgExtendedError");
+        return (err && err() != 0) ? -1 : 0;
+    }
+    if (save) {
+        int f = (int)ofn.nFilterIndex, typed = pc_format_from_ext(file);
+        if (f <= 0 || f >= PC_FMT_COUNT) f = PC_FMT_PSD;
+        /* A name typed with a supported extension picks that format (the
+         * written format must agree with the extension); any other name
+         * gets the chosen type's extension. */
+        if (typed != PC_FMT_UNKNOWN) f = typed;
+        else {
+            pc_strlcat(file, ".", sizeof file);
+            pc_strlcat(file, pc_format_ext(f), sizeof file);
+            if (plat_file_exists(file)) {
+                char q[400];
+                pc_snprintf(q, sizeof q, "%s already exists.\r\nDo you want to replace it?", file);
+                if (dlg_message("Save As", q, MB_ICON_WARN_, 2) != 1) return 0;
+            }
+        }
+        if (fmt) *fmt = f;
+    } else if (fmt) {
+        *fmt = pc_format_from_ext(file);
+    }
+    pc_strlcpy(path, file, (size_t)n);
+    return 1;
+}
+
+int dlg_open_file(char *path, int n)
+{
+    if (!g_app.prefs.classic_file_dialogs) {
+        int rc = system_file_dialog(path, n, 0, NULL);
+        if (rc >= 0) return rc;
+    }
+    return run_file_dialog(path, n, 0, NULL, 0);
+}
 
 int dlg_save_file(char *path, int n, int *fmt, int layered_ok)
 {
+    if (!g_app.prefs.classic_file_dialogs) {
+        int rc = system_file_dialog(path, n, 1, fmt);
+        if (rc >= 0) return rc;
+    }
     return run_file_dialog(path, n, 1, fmt, layered_ok);
 }

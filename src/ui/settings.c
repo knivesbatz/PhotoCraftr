@@ -96,6 +96,7 @@ void settings_load(void)
     p->grid_spacing = reg_get_int("Settings", "GridSpacing", 32);
     p->grid_color = (u32)reg_get_int("Settings", "GridColor", 0x808080);
     p->tab_docs = reg_get_int("Settings", "TabDocuments", 1);
+    p->classic_file_dialogs = reg_get_int("Settings", "ClassicFileDialogs", 0);
     p->history_states = PC_CLAMP(p->history_states, 1, 100);
     g_app.fg = (u32)reg_get_int("Settings", "Foreground", 0x000000) & 0xFFFFFF;
     g_app.bg = (u32)reg_get_int("Settings", "Background", 0xFFFFFF) & 0xFFFFFF;
@@ -142,6 +143,7 @@ void settings_save(void)
     reg_set_int("Settings", "GridSpacing", p->grid_spacing);
     reg_set_int("Settings", "GridColor", (int)p->grid_color);
     reg_set_int("Settings", "TabDocuments", p->tab_docs);
+    reg_set_int("Settings", "ClassicFileDialogs", p->classic_file_dialogs);
     reg_set_int("Settings", "Foreground", (int)g_app.fg);
     reg_set_int("Settings", "Background", (int)g_app.bg);
     reg_set_int("Settings", "Tool", g_app.tool);

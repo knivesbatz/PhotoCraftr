@@ -1500,6 +1500,7 @@ int dlg_preferences(void)
     ADD(0, dlg_check(d, 113, 22, 132, 300, 16, "Windows &98-style gradient title bars", p->gradient_captions));
     ADD(0, dlg_check(d, 114, 22, 152, 300, 16, "Open documents as &tabs (CS6); off = floating windows", p->tab_docs));
     ADD(0, dlg_check(d, 115, 22, 172, 300, 16, "Check for &updates at startup", reg_get_int("Update", "CheckOnStartup", 1)));
+    ADD(0, dlg_check(d, 116, 22, 192, 300, 16, "Use &classic Open and Save dialogs", p->classic_file_dialogs));
     /* Saving Files */
     for (k = 0; k < 6; k++) if (qvals[k] <= p->jpeg_quality) q = k;
     ADD(1, dlg_label(d, 14, 44, 140, 16, "Default JPEG quality:"));
@@ -1540,6 +1541,7 @@ int dlg_preferences(void)
         p->gradient_captions = dlg_get_check(d, 113);
         p->tab_docs = dlg_get_check(d, 114);
         reg_set_int("Update", "CheckOnStartup", dlg_get_check(d, 115));
+        p->classic_file_dialogs = dlg_get_check(d, 116);
         p->jpeg_quality = qvals[PC_CLAMP(dlg_get_combo(d, 120), 0, 5)];
         p->precise_cursors = dlg_get_check(d, 131);
         p->brush_size_cursor = dlg_get_check(d, 132);
