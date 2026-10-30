@@ -422,6 +422,44 @@ static void draw_brush_preview(HDC dc, const RECT *r, const PcBrush *b)
     w95_draw_arrow(dc, r->right - 1, cy, 1, 3, W95_TEXT);
 }
 
+/* CS6 Cancel / Commit buttons, shown while a transform or crop is pending. */
+static int pending_buttons(RECT *cancel, RECT *commit)
+{
+    DocView *v = app_view();
+    if (!v || !(v->xf_active || v->crop_active)) return 0;
+    SetRect(cancel, g_ws_combo_x - 62, 4, g_ws_combo_x - 40, 26);
+    SetRect(commit, g_ws_combo_x - 36, 4, g_ws_combo_x - 14, 26);
+    return 1;
+}
+
+static void draw_pending_buttons(HDC dc)
+{
+    RECT rc, rk;
+    HPEN pen, old;
+    HBRUSH ob;
+    int cx, cy;
+    if (!pending_buttons(&rc, &rk)) return;
+    w95_thin_raised(dc, &rc);
+    w95_thin_raised(dc, &rk);
+    /* cancel: circle with a slash */
+    cx = (rc.left + rc.right) / 2; cy = (rc.top + rc.bottom) / 2;
+    pen = CreatePen(PS_SOLID, 2, RGB(128, 0, 0));
+    old = (HPEN)SelectObject(dc, pen);
+    ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+    Ellipse(dc, cx - 6, cy - 6, cx + 7, cy + 7);
+    MoveToEx(dc, cx - 4, cy - 4, NULL); LineTo(dc, cx + 5, cy + 5);
+    SelectObject(dc, ob);
+    SelectObject(dc, old);
+    DeleteObject(pen);
+    /* commit: check mark */
+    cx = (rk.left + rk.right) / 2; cy = (rk.top + rk.bottom) / 2;
+    pen = CreatePen(PS_SOLID, 2, RGB(0, 128, 0));
+    old = (HPEN)SelectObject(dc, pen);
+    MoveToEx(dc, cx - 6, cy, NULL); LineTo(dc, cx - 2, cy + 4); LineTo(dc, cx + 6, cy - 5);
+    SelectObject(dc, old);
+    DeleteObject(pen);
+}
+
 static void bar_paint(HWND hwnd, HDC target)
 {
     RECT r, ir;
@@ -484,6 +522,7 @@ static void bar_paint(HWND hwnd, HDC target)
         w95_vline(dc, g_ws_combo_x - 8, 4, 26, W95_SHADOW); w95_vline(dc, g_ws_combo_x - 7, 4, 26, W95_HILIGHT);
         (void)wl;
     }
+    draw_pending_buttons(dc);
     w95_buf_end(&b);
 }
 
@@ -569,7 +608,12 @@ static LRESULT CALLBACK bar_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_LBUTTONDOWN: {
         int x = (short)LOWORD(lp), y = (short)HIWORD(lp), i;
         POINT p;
+        RECT rc, rk;
         p.x = x; p.y = y;
+        if (pending_buttons(&rc, &rk)) {
+            if (PtInRect(&rc, p)) { tool_cancel(app_view()); SetFocus(g_app.main); return 0; }
+            if (PtInRect(&rk, p)) { tool_commit(app_view()); SetFocus(g_app.main); return 0; }
+        }
         if (x < 34) {
             /* Tool preset box: cycles through the tools of the current slot. */
             int cur = g_app.tool, t;

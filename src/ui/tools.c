@@ -290,6 +290,7 @@ void tool_begin_free_transform(DocView *v)
     memcpy(v->xf_orig, v->xf_quad, sizeof v->xf_quad);
     v->xf_handle = -1;
     view_invalidate(v, NULL);
+    options_refresh();
 }
 
 static void xf_preview(DocView *v)
@@ -403,6 +404,7 @@ static void crop_commit(DocView *v)
         view_zoom_fit(v, 0);
     }
     view_invalidate(v, NULL);
+    options_refresh();
 }
 
 /* ---------------- commit / cancel ---------------- */
@@ -431,6 +433,7 @@ void tool_commit(DocView *v)
     }
     v->measure_active = 0;
     view_invalidate(v, NULL);
+    options_refresh();
 }
 
 void tool_cancel(DocView *v)
@@ -445,6 +448,7 @@ void tool_cancel(DocView *v)
     v->dragging = 0;
     if (GetCapture() == v->hwnd) ReleaseCapture();
     view_invalidate(v, NULL);
+    options_refresh();
 }
 
 /* ---------------- mouse ---------------- */
@@ -677,6 +681,7 @@ void tool_mouse(DocView *v, UINT msg, int x, int y, WPARAM wp)
             v->dragging = 0; ReleaseCapture();
             if (fabsf(v->crop[2] - v->crop[0]) < 1 || fabsf(v->crop[3] - v->crop[1]) < 1) v->crop_active = 0;
             InvalidateRect(v->hwnd, NULL, FALSE);
+            options_refresh();
         }
         return;
     case T_GRADIENT:
@@ -1095,13 +1100,22 @@ int tool_cursor(DocView *v)
         POINT p;
         int h;
         GetCursorPos(&p); ScreenToClient(v->hwnd, &p);
-        h = xf_hit(v, p.x, p.y);
+        /* While dragging keep the grabbed handle's cursor. */
+        h = v->dragging && v->xf_handle >= 0 ? v->xf_handle : xf_hit(v, p.x, p.y);
         if (h == 8) return PC_CURSOR_MOVE;
         if (h == 9) return PC_CURSOR_ROTATE;
-        if (h == 0 || h == 2) return PC_CURSOR_SCALE_NWSE;
-        if (h == 1 || h == 3) return PC_CURSOR_SCALE_NESW;
-        if (h == 4 || h == 6) return PC_CURSOR_SCALE_NS;
-        return PC_CURSOR_SCALE_EW;
+        {
+            /* Arrow along the handle's direction from the centre, so it follows rotation and flips. */
+            static const int dirs[4] = { PC_CURSOR_SCALE_EW, PC_CURSOR_SCALE_NWSE, PC_CURSOR_SCALE_NS, PC_CURSOR_SCALE_NESW };
+            const float *q = v->xf_quad;
+            float hx, hy, cx = (q[0] + q[2] + q[4] + q[6]) / 4, cy = (q[1] + q[3] + q[5] + q[7]) / 4;
+            double a;
+            if (h < 4) { hx = q[h * 2]; hy = q[h * 2 + 1]; }
+            else { int j = (h - 3) % 4; hx = (q[(h - 4) * 2] + q[j * 2]) / 2; hy = (q[(h - 4) * 2 + 1] + q[j * 2 + 1]) / 2; }
+            a = atan2(hy - cy, hx - cx) * 180 / M_PI;   /* doc y points down, like the screen */
+            if (a < 0) a += 180;
+            return dirs[(int)floor(a / 45 + 0.5) % 4];
+        }
     }
     if (t == T_ZOOM) return GetKeyState(VK_MENU) < 0 ? PC_CURSOR_ZOOM_OUT : (v->zoom >= 16 ? PC_CURSOR_ZOOM_NONE : PC_CURSOR_ZOOM_IN);
     if (t == T_STAMP && GetKeyState(VK_MENU) < 0) return PC_CURSOR_STAMP_SOURCE;

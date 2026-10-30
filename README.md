@@ -113,7 +113,7 @@ Every other format keeps the strict 1998 rules.
 
 ## Status and compatibility
 
-This is a preview release (0.2.0). The executables pass an import audit against
+This is a preview release (0.2.1). The executables pass an import audit against
 a curated list of Windows 95 functions, contain no SSE/MMX code, and declare
 subsystem 4.0. They have been smoke-tested under Wine with Wine set to report
 Windows 95, 98 and 10. **They have not yet been run on real Windows machines.**

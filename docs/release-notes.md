@@ -1,3 +1,11 @@
+PhotoCraft Classic 0.2.1
+========================
+
+- Free Transform and Crop show CS6's Cancel and Commit buttons at the
+  right of the Options bar while they are pending.
+- Free Transform cursors keep the grabbed handle's arrow while dragging
+  and follow the box when it is rotated or flipped.
+
 PhotoCraft Classic 0.2.0
 ========================
 
