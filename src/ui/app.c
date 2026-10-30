@@ -189,7 +189,7 @@ int app_open_file(const char *path)
 {
     u8 *data = NULL;
     size_t n = 0;
-    char err[256];
+    char err[256] = "";
     PcDoc *d;
     int i;
     for (i = 0; i < g_app.nviews; i++)
@@ -202,6 +202,7 @@ int app_open_file(const char *path)
     }
     free(data);
     if (!d) { app_error("Could not open \"%s\": %s", plat_basename(path), err); return -1; }
+    if (err[0]) dlg_message(APP_NAME, err, MB_ICON_WARN_, 0);   /* loaded with a warning */
     {
         /* Remember the folder for the next Open. */
         const char *base = plat_basename(path);
