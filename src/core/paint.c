@@ -11,7 +11,7 @@
  */
 #include "pcops.h"
 
-enum { TARGET_LAYER, TARGET_MASK, TARGET_QUICKMASK };
+enum { TARGET_LAYER, TARGET_MASK, TARGET_QUICKMASK, TARGET_CHANNEL };
 
 struct PcStroke {
     PcDoc *d;
@@ -117,12 +117,17 @@ PcStroke *pc_stroke_begin(PcDoc *d, const PcPaintOpts *o, float x, float y)
     if (!s) return NULL;
     s->d = d; s->l = l; s->o = *o; s->w = d->s.w; s->h = d->s.h;
     s->rng = 0x9E3779B9u ^ (unsigned)(x * 31 + y * 17);
-    s->target = o->target_mask == 2 ? TARGET_QUICKMASK : (o->target_mask && l && l->mask) ? TARGET_MASK : TARGET_LAYER;
+    s->target = o->target_mask == 3 ? TARGET_CHANNEL : o->target_mask == 2 ? TARGET_QUICKMASK :
+                (o->target_mask && l && l->mask) ? TARGET_MASK : TARGET_LAYER;
+    if (s->target == TARGET_CHANNEL && (o->channel < 0 || o->channel >= d->s.nchannels)) { free(s); return NULL; }
     if (s->target == TARGET_LAYER) {
         if (!l || l->lock_pixels) { free(s); return NULL; }
         s->px = pc_layer_pixels_w(l); s->ch = 4;
     } else if (s->target == TARGET_MASK) {
         s->px = pc_layer_mask_w(l); s->ch = 1;
+    } else if (s->target == TARGET_CHANNEL) {
+        PcBuf *cb = pc_buf_writable(&d->s.channels[o->channel].buf);
+        s->px = cb ? cb->px : NULL; s->ch = 1;
     } else {
         PcBuf *sb = pc_sel_get(d, 1);
         s->px = sb ? sb->px : NULL; s->ch = 1;
@@ -189,7 +194,6 @@ static void recomposite(PcStroke *s, int x0, int y0, int x1, int y1)
                 u8 g;
                 if (o->tool == PC_PAINT_ERASER) g = gray_of(o->bg);
                 else g = gray_of(o->color);
-                if (s->target == TARGET_QUICKMASK) g = (u8)g;   /* white = selected */
                 v = (g * a + s->orig[i] * (255 - a) + 127) / 255;
                 s->px[i] = (u8)v;
                 continue;

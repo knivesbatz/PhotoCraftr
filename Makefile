@@ -37,7 +37,7 @@ RT_CFLAGS  := $(WIN_CFLAGS) -fno-builtin -fno-tree-loop-distribute-patterns
 WIN_LDFLAGS := -nostdlib -nostartfiles -Wl,-e,_pc_entry -Wl,--gc-sections -s \
                -Wl,--major-os-version,4 -Wl,--minor-os-version,0 \
                -Wl,--major-subsystem-version,4 -Wl,--minor-subsystem-version,0 \
-               -Wl,--disable-dynamicbase -Wl,--disable-nxcompat -Wl,--disable-high-entropy-va \
+               -Wl,--disable-dynamicbase -Wl,--disable-nxcompat \
                -Wl,--disable-reloc-section
 WIN_GUI    := -Wl,--subsystem,windows:4.0
 
@@ -85,7 +85,7 @@ $(BW)/res/%.o: res/%.rc $(wildcard res/*)
 
 APP_OBJ := $(call obj_win,$(RT_SRC) $(FMT_SRC) $(CORE_SRC) $(IO_SRC) $(UI_SRC)) $(BW)/res/app.o
 $(APP_EXE): $(APP_OBJ)
-	$(CC_WIN) $(WIN_LDFLAGS) $(WIN_GUI) $^ -o $@ -lgdi32 -luser32 -lkernel32 -ladvapi32 -lgcc
+	$(CC_WIN) $(WIN_LDFLAGS) $(WIN_GUI) $^ -o $@ -lgdi32 -luser32 -lkernel32 -ladvapi32 -lshell32 -lwinspool -lgcc
 
 UPD_OBJ := $(call obj_win,$(RT_SRC) $(FMT_SRC) $(UPD_SRC) $(BEARSSL_SRC) $(MONO_SRC)) $(BW)/res/updater.o
 $(UPD_EXE): $(UPD_OBJ)

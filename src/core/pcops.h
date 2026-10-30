@@ -190,7 +190,8 @@ typedef struct PcPaintOpts {
     int finger;       /* smudge finger painting */
     int erase_to_history;
     int auto_erase;   /* pencil */
-    int target_mask;  /* paint into the active layer's mask */
+    int target_mask;  /* 0 layer pixels, 1 layer mask, 2 quick mask (selection), 3 alpha channel */
+    int channel;      /* alpha channel index when target_mask == 3 */
 } PcPaintOpts;
 
 typedef struct PcStroke PcStroke;
