@@ -33,34 +33,19 @@ unsigned pc_rand(unsigned *state);
 
 /* ---------------- adjustments (adjust.c) ---------------- */
 
-typedef struct PcLevels {
-    int in_black[4], in_white[4];   /* [0] = composite RGB, 1..3 = R,G,B */
-    float gamma[4];
-    int out_black[4], out_white[4];
-} PcLevels;
 void pc_levels_default(PcLevels *lv);
 void pc_levels_lut(const PcLevels *lv, u8 lut[3][256]);
 int pc_adj_levels(PcDoc *d, const PcLevels *lv);
 int pc_adj_auto_levels(PcDoc *d);
 
-typedef struct PcCurve { int n; int x[16], y[16]; } PcCurve;   /* points sorted by x, 0..255 */
-typedef struct PcCurves { PcCurve c[4]; } PcCurves;            /* [0] composite */
 void pc_curves_default(PcCurves *cv);
 void pc_curve_lut(const PcCurve *c, u8 lut[256]);              /* natural cubic spline */
 int pc_adj_curves(PcDoc *d, const PcCurves *cv);
 
 int pc_adj_brightness_contrast(PcDoc *d, int brightness, int contrast);   /* -100..100 */
 
-typedef struct PcColorBalance {
-    int v[3][3];     /* [shadows/midtones/highlights][cyan-red, magenta-green, yellow-blue] -100..100 */
-    int preserve_luminosity;
-} PcColorBalance;
 int pc_adj_color_balance(PcDoc *d, const PcColorBalance *cb);
 
-typedef struct PcHueSat {
-    int hue[7], sat[7], light[7];   /* [0] master, 1..6 reds yellows greens cyans blues magentas */
-    int colorize;                   /* uses hue[0] 0..360, sat[0] 0..100, light[0] */
-} PcHueSat;
 int pc_adj_hue_sat(PcDoc *d, const PcHueSat *hs);
 
 int pc_adj_invert(PcDoc *d);
@@ -70,6 +55,10 @@ int pc_adj_threshold(PcDoc *d, int level);
 int pc_adj_posterize(PcDoc *d, int levels);
 int pc_adj_channel_mixer(PcDoc *d, const int m[3][4], int monochrome);  /* %, last = constant */
 void pc_histogram(const PcDoc *d, int channel, int use_composite, unsigned hist[256]);  /* channel 0 lum, 1..3 RGB */
+
+/* Any adjustment type on the active layer through the selection (what the
+ * pc_adj_* functions above call); fails on adjustment layers. */
+int pc_adjust_apply(PcDoc *d, const PcAdjust *a);
 
 /* Generic per-pixel adjustment through 3 LUTs. */
 int pc_adj_luts(PcDoc *d, u8 lut[3][256]);

@@ -340,6 +340,32 @@ int dlg_rotate(double *deg)
     return rc == IDOK && *deg != 0;
 }
 
+/* ---------------- adjustment previews ---------------- */
+
+/* While dlg_adjust_layer runs, previews set the active adjustment layer's
+ * parameters (the compositor shows them) instead of changing pixels. */
+static int g_adj_layer_mode;
+
+static void preview_adjust(PcDoc *doc, const PcAdjust *a)
+{
+    PcLayer *l = pc_doc_active(doc);
+    if (g_adj_layer_mode && l && l->kind == PC_LAYER_ADJUST) { l->adj = *a; pc_doc_touch(doc); }
+    else if (!g_adj_layer_mode) pc_adjust_apply(doc, a);
+}
+
+static void preview_levels(PcDoc *doc, const PcLevels *lv) { PcAdjust a; pc_adjust_default(&a, PC_ADJ_LEVELS); a.levels = *lv; preview_adjust(doc, &a); }
+static void preview_curves(PcDoc *doc, const PcCurves *cv) { PcAdjust a; pc_adjust_default(&a, PC_ADJ_CURVES); a.curves = *cv; preview_adjust(doc, &a); }
+static void preview_huesat(PcDoc *doc, const PcHueSat *hs) { PcAdjust a; pc_adjust_default(&a, PC_ADJ_HUE_SAT); a.huesat = *hs; preview_adjust(doc, &a); }
+static void preview_balance(PcDoc *doc, const PcColorBalance *cb) { PcAdjust a; pc_adjust_default(&a, PC_ADJ_COLOR_BALANCE); a.balance = *cb; preview_adjust(doc, &a); }
+
+static void preview_value(PcDoc *doc, int type, int v1, int v2)
+{
+    PcAdjust a;
+    pc_adjust_default(&a, type);
+    a.brightness = v1; a.contrast = v2; a.threshold = v1; a.posterize = v1;
+    preview_adjust(doc, &a);
+}
+
 /* ---------------- Levels ---------------- */
 
 typedef struct { PcDoc *doc; PcLevels lv; unsigned hist[4][256]; int ch; DlgPreview pv; int drag; } LevelsCtx;
@@ -349,7 +375,7 @@ static void levels_apply_preview(Dlg *d)
     LevelsCtx *c = (LevelsCtx *)d->user;
     if (!dlg_get_check(d, 150)) { preview_restore(&c->pv); app_refresh(R_CANVAS); return; }
     preview_restore(&c->pv);
-    pc_adj_levels(c->doc, &c->lv);
+    preview_levels(c->doc, &c->lv);
     app_refresh(R_CANVAS);
 }
 
@@ -456,6 +482,7 @@ static void levels_change(Dlg *d, int id, int code)
         c->lv.out_black[k] = PC_CLAMP(dlg_get_int(d, 104), 0, 255);
         c->lv.out_white[k] = PC_CLAMP(dlg_get_int(d, 105), 0, 255);
         dlg_redraw(d, 120); dlg_redraw(d, 121);
+        levels_apply_preview(d);            /* typed values preview too */
         return;
     }
     if (id == 130 && code == DLG_CODE_CLICK) {
@@ -557,7 +584,7 @@ static void curves_preview(Dlg *d)
 {
     CurvesCtx *c = (CurvesCtx *)d->user;
     preview_restore(&c->pv);
-    if (dlg_get_check(d, 150)) pc_adj_curves(c->doc, &c->cv);
+    if (dlg_get_check(d, 150)) preview_curves(c->doc, &c->cv);
     app_refresh(R_CANVAS);
 }
 
@@ -651,7 +678,7 @@ static void hs_preview(Dlg *d)
 {
     HsCtx *c = (HsCtx *)d->user;
     preview_restore(&c->pv);
-    if (dlg_get_check(d, 150)) pc_adj_hue_sat(c->doc, &c->hs);
+    if (dlg_get_check(d, 150)) preview_huesat(c->doc, &c->hs);
     app_refresh(R_CANVAS);
     dlg_redraw(d, 160);
 }
@@ -750,7 +777,7 @@ static void cb_preview(Dlg *d)
 {
     CbCtx *c = (CbCtx *)d->user;
     preview_restore(&c->pv);
-    if (dlg_get_check(d, 150)) pc_adj_color_balance(c->doc, &c->cb);
+    if (dlg_get_check(d, 150)) preview_balance(c->doc, &c->cb);
     app_refresh(R_CANVAS);
 }
 
@@ -820,8 +847,9 @@ static void simple_preview(Dlg *d)
     SimpleCtx *c = (SimpleCtx *)d->user;
     preview_restore(&c->pv);
     if (dlg_get_check(d, 150)) {
-        if (c->kind == 0) pc_adj_brightness_contrast(c->doc, c->a, c->b);
-        else if (c->kind == 1) pc_adj_threshold(c->doc, c->a);
+        if (c->kind == 0) preview_value(c->doc, PC_ADJ_BRIGHTNESS_CONTRAST, c->a, c->b);
+        else if (c->kind == 1) preview_value(c->doc, PC_ADJ_THRESHOLD, PC_CLAMP(c->a, 1, 255), 0);
+        else if (c->kind == 2) preview_value(c->doc, PC_ADJ_POSTERIZE, PC_CLAMP(c->a, 2, 255), 0);
     }
     app_refresh(R_CANVAS);
 }
@@ -904,31 +932,93 @@ int dlg_threshold(PcDoc *doc, int *level)
     return rc == IDOK;
 }
 
-int dlg_posterize(int *levels)
+static void post_change(Dlg *d, int id, int code)
 {
-    Dlg *d = dlg_create("Posterize", 280, 70, NULL, NULL);
+    SimpleCtx *c = (SimpleCtx *)d->user;
+    if (id == 101 && code == DLG_CODE_CHANGE) { c->a = dlg_get_int(d, 101); if (c->a >= 2) simple_preview(d); }
+    if (id == 150) simple_preview(d);
+}
+
+int dlg_posterize(PcDoc *doc, int *levels)
+{
+    Dlg *d;
+    SimpleCtx c;
     int rc;
     char b[16];
+    memset(&c, 0, sizeof c);
+    c.doc = doc; c.kind = 2; c.a = *levels;
+    d = dlg_create("Posterize", 280, 76, post_change, &c);
     if (!d) return 0;
     dlg_label(d, 14, 18, 50, 16, "Levels:");
     pc_snprintf(b, sizeof b, "%d", *levels);
-    dlg_edit(d, 100, 64, 15, 50, 20, b, DLG_NUMBER);
+    dlg_edit(d, 101, 64, 15, 50, 20, b, DLG_NUMBER);
     ok_cancel(d, 280);
+    dlg_check(d, 150, 14, 48, BW + 4, 16, "&Preview", 1);
+    preview_begin(&c.pv, doc);
+    simple_preview(d);
     rc = dlg_run(d);
-    if (rc == IDOK) *levels = PC_CLAMP(dlg_get_int(d, 100), 2, 255);
+    if (rc == IDOK) *levels = PC_CLAMP(dlg_get_int(d, 101), 2, 255);
+    preview_end(&c.pv, 0);
     dlg_destroy(d);
     return rc == IDOK;
+}
+
+typedef struct { PcDoc *doc; int m[3][4]; int mono, out; DlgPreview pv; } MixCtx;
+
+static void mix_sync(Dlg *d)
+{
+    MixCtx *c = (MixCtx *)d->user;
+    int k, o = c->mono ? 0 : c->out;
+    for (k = 0; k < 3; k++) dlg_set_int(d, 101 + k, c->m[o][k]);
+    dlg_set_int(d, 104, c->m[o][3]);
+}
+
+static void mix_preview(Dlg *d)
+{
+    MixCtx *c = (MixCtx *)d->user;
+    preview_restore(&c->pv);
+    if (dlg_get_check(d, 150)) {
+        PcAdjust a;
+        pc_adjust_default(&a, PC_ADJ_CHANNEL_MIXER);
+        memcpy(a.mixer, c->m, sizeof a.mixer);
+        a.mixer_mono = c->mono;
+        if (c->mono) { memcpy(a.mixer[1], c->m[0], sizeof a.mixer[1]); memcpy(a.mixer[2], c->m[0], sizeof a.mixer[2]); }
+        preview_adjust(c->doc, &a);
+    }
+    app_refresh(R_CANVAS);
+}
+
+static void mix_change(Dlg *d, int id, int code)
+{
+    MixCtx *c = (MixCtx *)d->user;
+    if (id == 100 && code == DLG_CODE_CHANGE) { c->out = PC_CLAMP(dlg_get_combo(d, 100), 0, 2); mix_sync(d); return; }
+    if (id >= 101 && id <= 104 && code == DLG_CODE_CHANGE) {
+        int k, o = c->mono ? 0 : c->out;
+        for (k = 0; k < 3; k++) c->m[o][k] = PC_CLAMP(dlg_get_int(d, 101 + k), -200, 200);
+        c->m[o][3] = PC_CLAMP(dlg_get_int(d, 104), -200, 200);
+        mix_preview(d);
+        return;
+    }
+    if (id == 105) {
+        c->mono = dlg_get_check(d, 105);
+        if (c->mono) { c->out = 0; dlg_set_combo(d, 100, 0); }
+        dlg_enable(d, 100, !c->mono);
+        mix_sync(d);
+        mix_preview(d);
+    }
+    if (id == 150) mix_preview(d);
 }
 
 int dlg_channel_mixer(PcDoc *doc, int m[3][4], int *mono)
 {
     static const char *const outs[] = { "Red", "Green", "Blue" };
     Dlg *d;
-    int rc, W = 380, k, out = 0, tmp[3][4];
-    (void)doc;
-    memcpy(tmp, m, sizeof tmp);
-    d = dlg_create("Channel Mixer", W, 210, NULL, NULL);
-    if (!d) return 0;
+    MixCtx *c = (MixCtx *)calloc(1, sizeof *c);
+    int rc, W = 380, k;
+    if (!c) return 0;
+    c->doc = doc; memcpy(c->m, m, sizeof c->m); c->mono = *mono;
+    d = dlg_create("Channel Mixer", W, 210, mix_change, c);
+    if (!d) { free(c); return 0; }
     dlg_label(d, 12, 15, 90, 16, "Output Channel:");
     dlg_combo(d, 100, 104, 12, 90, 20, outs, 3, 0);
     dlg_group(d, 10, 42, 280, 110, "Source Channels");
@@ -941,19 +1031,42 @@ int dlg_channel_mixer(PcDoc *doc, int m[3][4], int *mono)
     dlg_edit(d, 104, 80, 161, 50, 20, "", DLG_NUMBER | DLG_SIGNED);
     dlg_check(d, 105, 12, 190, 120, 16, "&Monochrome", *mono);
     ok_cancel(d, W);
-    for (k = 0; k < 3; k++) dlg_set_int(d, 101 + k, tmp[out][k]);
-    dlg_set_int(d, 104, tmp[out][3]);
+    dlg_check(d, 150, bx(W), 76, BW + 4, 16, "&Preview", 1);
+    dlg_enable(d, 100, !c->mono);
+    mix_sync(d);
+    preview_begin(&c->pv, doc);
     rc = dlg_run(d);
     if (rc == IDOK) {
-        out = dlg_get_combo(d, 100);
-        for (k = 0; k < 3; k++) tmp[out][k] = PC_CLAMP(dlg_get_int(d, 101 + k), -200, 200);
-        tmp[out][3] = PC_CLAMP(dlg_get_int(d, 104), -200, 200);
-        *mono = dlg_get_check(d, 105);
-        if (*mono) { tmp[1][0] = tmp[2][0] = tmp[0][0]; tmp[1][1] = tmp[2][1] = tmp[0][1]; tmp[1][2] = tmp[2][2] = tmp[0][2]; tmp[1][3] = tmp[2][3] = tmp[0][3]; }
-        memcpy(m, tmp, sizeof tmp);
+        mix_change(d, 101, DLG_CODE_CHANGE);
+        *mono = c->mono;
+        if (c->mono) for (k = 1; k < 3; k++) memcpy(c->m[k], c->m[0], sizeof c->m[0]);
+        memcpy(m, c->m, sizeof c->m);
     }
+    preview_end(&c->pv, 0);
     dlg_destroy(d);
+    free(c);
     return rc == IDOK;
+}
+
+/* ---------------- adjustment layer dialogs ---------------- */
+
+int dlg_adjust_layer(PcDoc *doc, PcAdjust *a)
+{
+    int ok = 1;
+    g_adj_layer_mode = 1;
+    switch (a->type) {
+    case PC_ADJ_BRIGHTNESS_CONTRAST: ok = dlg_brightness_contrast(doc, &a->brightness, &a->contrast); break;
+    case PC_ADJ_LEVELS: ok = dlg_levels(doc, &a->levels); break;
+    case PC_ADJ_CURVES: ok = dlg_curves(doc, &a->curves); break;
+    case PC_ADJ_COLOR_BALANCE: ok = dlg_color_balance(doc, &a->balance); break;
+    case PC_ADJ_HUE_SAT: ok = dlg_hue_sat(doc, &a->huesat); break;
+    case PC_ADJ_CHANNEL_MIXER: ok = dlg_channel_mixer(doc, a->mixer, &a->mixer_mono); break;
+    case PC_ADJ_THRESHOLD: ok = dlg_threshold(doc, &a->threshold); break;
+    case PC_ADJ_POSTERIZE: ok = dlg_posterize(doc, &a->posterize); break;
+    default: break;                         /* Invert has no settings */
+    }
+    g_adj_layer_mode = 0;
+    return ok;
 }
 
 /* ---------------- filter dialogs ---------------- */

@@ -3953,6 +3953,210 @@ static const char cur_move_selection[] =
     "................................";
 PC_ART_CHECK(cur_move_selection, 32, 32);
 
+/* ==================================================================== */
+/* Adjustments panel */
+/* ==================================================================== */
+
+/* PC_ICON_PANEL_ADJUSTMENTS (16x16) */
+static const char ico_panel_adjustments[] =
+    "................"
+    "................"
+    "....kkk........."
+    "....kwk........."
+    "kkkkkwkkkkkkkkkk"
+    "....kkk........."
+    "..........kkk..."
+    "..........kwk..."
+    "kkkkkkkkkkkwkkkk"
+    "..........kkk..."
+    ".......kkk......"
+    ".......kwk......"
+    "kkkkkkkkwkkkkkkk"
+    ".......kkk......"
+    "................"
+    "................";
+PC_ART_CHECK(ico_panel_adjustments, 16, 16);
+
+/* PC_ICON_ADJ_BRIGHTNESS (16x16) */
+static const char ico_adj_brightness[] =
+    "................"
+    ".......k........"
+    "..k....k....k..."
+    "...k.......k...."
+    "......kkk......."
+    ".....kYYkk......"
+    "....kYYYkkk....."
+    "kk..kYYYkkk..kk."
+    "....kYYYkkk....."
+    ".....kYYkk......"
+    "......kkk......."
+    "...k.......k...."
+    "..k....k....k..."
+    ".......k........"
+    "................"
+    "................";
+PC_ART_CHECK(ico_adj_brightness, 16, 16);
+
+/* PC_ICON_ADJ_LEVELS (16x16) */
+static const char ico_adj_levels[] =
+    "................"
+    "................"
+    "..........k....."
+    "..........k....."
+    ".........kk....."
+    "....k....kkk...."
+    "....kk..kkkk...."
+    "...kkkk.kkkkk..."
+    "..kkkkkkkkkkkk.."
+    "..kkkkkkkkkkkk.."
+    "................"
+    "...k....k....k.."
+    "..kkk..kdk..kwk."
+    ".kkkkkkkkkkkkkkk"
+    "................"
+    "................";
+PC_ART_CHECK(ico_adj_levels, 16, 16);
+
+/* PC_ICON_ADJ_CURVES (16x16) */
+static const char ico_adj_curves[] =
+    "................"
+    ".kkkkkkkkkkkkkk."
+    ".kwwwwwwwwwwwwk."
+    ".kwwgwwwwwwkkkk."
+    ".kwwgwwwwwkwgwk."
+    ".kggggggggkgggk."
+    ".kwwgwwwwkwwgwk."
+    ".kwwgwwwkwwwgwk."
+    ".kwwgwwkwwwwgwk."
+    ".kwwgwkwwwwwgwk."
+    ".kggggkgggggggk."
+    ".kwwgkwwwwwwgwk."
+    ".kkkkwwwwwwwgwk."
+    ".kwwwwwwwwwwwwk."
+    ".kkkkkkkkkkkkkk."
+    "................";
+PC_ART_CHECK(ico_adj_curves, 16, 16);
+
+/* PC_ICON_ADJ_COLOR_BALANCE (16x16) */
+static const char ico_adj_color_balance[] =
+    "................"
+    ".......kk......."
+    ".......kk......."
+    "kkkkkkkkkkkkkkkk"
+    ".k.....kk.....k."
+    ".k.....kk.....k."
+    "k.k....kk....k.k"
+    "k.k....kk....k.k"
+    "kkkkk..kk..kkkkk"
+    "kCCCk..kk..kRRRk"
+    ".kkk...kk...kkk."
+    ".......kk......."
+    ".......kk......."
+    ".....kkkkkk....."
+    "....kkkkkkkk...."
+    "................";
+PC_ART_CHECK(ico_adj_color_balance, 16, 16);
+
+/* PC_ICON_ADJ_HUE_SAT (16x16) */
+static const char ico_adj_hue_sat[] =
+    "................"
+    ".kkkkkkkkkkkkkk."
+    ".kRRRRRRRRRRRRk."
+    ".kRRRRRRRRRRRRk."
+    ".kYYYYYYYYYYYYk."
+    ".kYYYYYYYYYYYYk."
+    ".kLLLLLLLLLLLLk."
+    ".kLLLLLLLLLLLLk."
+    ".kCCCCCCCCCCCCk."
+    ".kCCCCCCCCCCCCk."
+    ".kBBBBBBBBBBBBk."
+    ".kBBBBBBBBBBBBk."
+    ".kFFFFFFFFFFFFk."
+    ".kFFFFFFFFFFFFk."
+    ".kkkkkkkkkkkkkk."
+    "................";
+PC_ART_CHECK(ico_adj_hue_sat, 16, 16);
+
+/* PC_ICON_ADJ_CHANNEL_MIXER (16x16) */
+static const char ico_adj_channel_mixer[] =
+    "................"
+    "kkkk............"
+    "kRRk............"
+    "kRRkkk.........."
+    "kkkk..k........."
+    "........k.kkkkk."
+    "kkkk.....kkwddk."
+    "kGGkkkkkkkkwddk."
+    "kkkk.....kkwddk."
+    "........k.kkkkk."
+    "kkkk..k........."
+    "kBBkkk.........."
+    "kBBk............"
+    "kkkk............"
+    "................"
+    "................";
+PC_ART_CHECK(ico_adj_channel_mixer, 16, 16);
+
+/* PC_ICON_ADJ_INVERT (16x16) */
+static const char ico_adj_invert[] =
+    "................"
+    ".kkkkkkkkkkkkkk."
+    ".kwwwwwwwwwwwkk."
+    ".kwwwwwwwwwwkkk."
+    ".kwwkkkwwwwkkkk."
+    ".kwwkkkwwwkkkkk."
+    ".kwwkkkwwkkkkkk."
+    ".kwwwwwwkkkkkkk."
+    ".kwwwwwkkkkkkkk."
+    ".kwwwwkkkkwwwkk."
+    ".kwwwkkkkkwwwkk."
+    ".kwwkkkkkkwwwkk."
+    ".kwkkkkkkkkkkkk."
+    ".kkkkkkkkkkkkkk."
+    "................"
+    "................";
+PC_ART_CHECK(ico_adj_invert, 16, 16);
+
+/* PC_ICON_ADJ_THRESHOLD (16x16) */
+static const char ico_adj_threshold[] =
+    "................"
+    ".kkkkkkkkkkkkkk."
+    ".kkkkkkwwwwwwwk."
+    ".kkkkkkwwwwwwwk."
+    ".kkkkkkkwwwwwwk."
+    ".kkkkkkkwwwwwwk."
+    ".kkkkkwwwwwwwwk."
+    ".kkkkkwwwwwwwwk."
+    ".kkkkkkkkwwwwwk."
+    ".kkkkkkkkwwwwwk."
+    ".kkkkkkwwwwwwwk."
+    ".kkkkkkwwwwwwwk."
+    ".kkkkkkkkkwwwwk."
+    ".kkkkkkkkkkkkkk."
+    "................"
+    "................";
+PC_ART_CHECK(ico_adj_threshold, 16, 16);
+
+/* PC_ICON_ADJ_POSTERIZE (16x16) */
+static const char ico_adj_posterize[] =
+    "................"
+    ".kkkkkkkkkkkkkk."
+    ".kwwwwwwwwwwwwk."
+    ".kwwwwwwwwwwwwk."
+    ".kwwwwwwwwwgggk."
+    ".kwwwwwwwwwgggk."
+    ".kwwwwwwgggdddk."
+    ".kwwwwwwgggdddk."
+    ".kwwwgggdddnnnk."
+    ".kwwwgggdddnnnk."
+    ".kgggdddnnnkkkk."
+    ".kgggdddnnnkkkk."
+    ".kdddnnnkkkkkkk."
+    ".kkkkkkkkkkkkkk."
+    "................"
+    "................";
+PC_ART_CHECK(ico_adj_posterize, 16, 16);
+
 static const PcIconDef g_icons[PC_ICON_COUNT] = {
     [PC_ICON_TOOL_MOVE] = { "tool_move", 16, 16, ico_tool_move },
     [PC_ICON_TOOL_MARQUEE_RECT] = { "tool_marquee_rect", 16, 16, ico_tool_marquee_rect },
@@ -4083,6 +4287,16 @@ static const PcIconDef g_icons[PC_ICON_COUNT] = {
     [PC_ICON_NEW_FOLDER] = { "new_folder", 16, 16, ico_new_folder },
     [PC_ICON_VIEW_LIST] = { "view_list", 16, 16, ico_view_list },
     [PC_ICON_VIEW_DETAILS] = { "view_details", 16, 16, ico_view_details },
+    [PC_ICON_PANEL_ADJUSTMENTS] = { "panel_adjustments", 16, 16, ico_panel_adjustments },
+    [PC_ICON_ADJ_BRIGHTNESS] = { "adj_brightness", 16, 16, ico_adj_brightness },
+    [PC_ICON_ADJ_LEVELS] = { "adj_levels", 16, 16, ico_adj_levels },
+    [PC_ICON_ADJ_CURVES] = { "adj_curves", 16, 16, ico_adj_curves },
+    [PC_ICON_ADJ_COLOR_BALANCE] = { "adj_color_balance", 16, 16, ico_adj_color_balance },
+    [PC_ICON_ADJ_HUE_SAT] = { "adj_hue_sat", 16, 16, ico_adj_hue_sat },
+    [PC_ICON_ADJ_CHANNEL_MIXER] = { "adj_channel_mixer", 16, 16, ico_adj_channel_mixer },
+    [PC_ICON_ADJ_INVERT] = { "adj_invert", 16, 16, ico_adj_invert },
+    [PC_ICON_ADJ_THRESHOLD] = { "adj_threshold", 16, 16, ico_adj_threshold },
+    [PC_ICON_ADJ_POSTERIZE] = { "adj_posterize", 16, 16, ico_adj_posterize },
 };
 
 static const PcCursorDef g_cursors[PC_CURSOR_COUNT] = {

@@ -168,6 +168,17 @@ enum PcIconId {
     PC_ICON_NEW_FOLDER,                  /* 16x16 */
     PC_ICON_VIEW_LIST,                   /* 16x16 */
     PC_ICON_VIEW_DETAILS,                /* 16x16 */
+    /* Adjustments panel (one per adjustment layer type, PC_ADJ_* order) */
+    PC_ICON_PANEL_ADJUSTMENTS,           /* 16x16 */
+    PC_ICON_ADJ_BRIGHTNESS,              /* 16x16 */
+    PC_ICON_ADJ_LEVELS,                  /* 16x16 */
+    PC_ICON_ADJ_CURVES,                  /* 16x16 */
+    PC_ICON_ADJ_COLOR_BALANCE,           /* 16x16 */
+    PC_ICON_ADJ_HUE_SAT,                 /* 16x16 */
+    PC_ICON_ADJ_CHANNEL_MIXER,           /* 16x16 */
+    PC_ICON_ADJ_INVERT,                  /* 16x16 */
+    PC_ICON_ADJ_THRESHOLD,               /* 16x16 */
+    PC_ICON_ADJ_POSTERIZE,               /* 16x16 */
     PC_ICON_COUNT
 };
 

@@ -331,6 +331,8 @@ void actions_panel_paint(HDC dc, const RECT *r, int scroll)
             int j, o = 0;
             for (j = 0; g_cmd_info[s->cmd].label[j] && o < 90; j++) if (g_cmd_info[s->cmd].label[j] != '&' && g_cmd_info[s->cmd].label[j] != '.') label[o++] = g_cmd_info[s->cmd].label[j];
             label[o] = 0;
+            if (s->cmd >= CMD_ADJ_BRIGHTNESS_CONTRAST && s->cmd <= CMD_ADJ_POSTERIZE)
+                pc_snprintf(label, sizeof label, "Make %s Layer", pc_adjust_name(s->cmd - CMD_ADJ_BRIGHTNESS_CONTRAST));
             indent = 28; enabled = s->enabled; dialog = s->dialog; has_dialog = strstr(g_cmd_info[s->cmd].label, "...") != NULL;
         }
         if (enabled) w95_icon(dc, PC_ICON_CHECK, ck.left + 4, y + 4);

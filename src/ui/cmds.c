@@ -48,6 +48,10 @@ static int layer_editable(PcDoc *d, const char *what)
 {
     PcLayer *l = pc_doc_active(d);
     if (!l) return 0;
+    if (l->kind == PC_LAYER_ADJUST) {
+        app_error("Could not complete the %s command because the active layer is an adjustment layer. Select a pixel layer, or paint on the adjustment layer's mask.", what);
+        return 0;
+    }
     if (l->kind == PC_LAYER_TEXT) {
         if (app_confirm(APP_NAME, "This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?") != 1) return 0;
         l->kind = PC_LAYER_PIXEL;
@@ -180,6 +184,7 @@ void cmd_state(int cmd, int *en, int *ck)
         *en = d && (g_app.clip.rgba || IsClipboardFormatAvailable(CF_DIB)) && (cmd == CMD_PASTE || sel);
         return;
     case CMD_WIN_ACTIONS: *ck = dock_panel_visible(P_ACTIONS); return;
+    case CMD_WIN_ADJUSTMENTS: *ck = dock_panel_visible(P_ADJUSTMENTS); return;
     case CMD_WIN_BRUSHES: *ck = dock_panel_visible(P_BRUSHES); return;
     case CMD_WIN_CHANNELS: *ck = dock_panel_visible(P_CHANNELS); return;
     case CMD_WIN_COLOR: *ck = dock_panel_visible(P_COLOR); return;
@@ -213,15 +218,20 @@ void cmd_state(int cmd, int *en, int *ck)
     case CMD_MODE_RGB: *ck = d->s.mode == PC_MODE_RGB; break;
     case CMD_LAYER_FROM_BG: *en = l && l->is_background; break;
     case CMD_DELETE_LAYER: *en = d->s.nlayers > 1; break;
-    case CMD_MERGE_DOWN: *en = d->s.active > 0 && l && d->s.layers[d->s.active - 1]->visible; break;
+    case CMD_MERGE_DOWN: *en = d->s.active > 0 && l && d->s.layers[d->s.active - 1]->visible && d->s.layers[d->s.active - 1]->kind != PC_LAYER_ADJUST; break;
     case CMD_MERGE_VISIBLE: case CMD_FLATTEN: *en = d->s.nlayers > 1 || (l && !l->is_background); break;
-    case CMD_LAYER_PROPS: case CMD_LAYER_STYLE: case CMD_LAYER_STYLE_SHADOW: case CMD_LAYER_STYLE_INNER: case CMD_LAYER_STYLE_GLOW: case CMD_LAYER_STYLE_BEVEL:
+    case CMD_LAYER_PROPS: *en = l && !l->is_background; break;
+    case CMD_LAYER_STYLE: case CMD_LAYER_STYLE_SHADOW: case CMD_LAYER_STYLE_INNER: case CMD_LAYER_STYLE_GLOW: case CMD_LAYER_STYLE_BEVEL:
     case CMD_FREE_TRANSFORM: case CMD_TRANSFORM_NUMERIC:
-        *en = l && !l->is_background; break;
+    case CMD_LAYER_ROT180: case CMD_LAYER_ROT90CW: case CMD_LAYER_ROT90CCW: case CMD_LAYER_FLIPH: case CMD_LAYER_FLIPV:
+        /* (layer effects and transforms need pixels: not for adjustment layers) */
+        *en = l && (!l->is_background || (cmd >= CMD_LAYER_ROT180 && cmd <= CMD_LAYER_FLIPV)) && l->kind != PC_LAYER_ADJUST; break;
+    case CMD_ADJ_EDIT: *en = l && l->kind == PC_LAYER_ADJUST && l->adj.type != PC_ADJ_INVERT; break;
     case CMD_STYLE_CLEAR: *en = l && l->fx_enabled; break;
     case CMD_MASK_REVEAL_ALL: case CMD_MASK_HIDE_ALL: *en = l && !l->is_background && !l->mask; break;
     case CMD_MASK_REVEAL_SEL: case CMD_MASK_HIDE_SEL: *en = l && !l->is_background && !l->mask && sel; break;
-    case CMD_MASK_APPLY: case CMD_MASK_DELETE: case CMD_MASK_TOGGLE: *en = l && l->mask; break;
+    case CMD_MASK_APPLY: *en = l && l->mask && l->kind != PC_LAYER_ADJUST; break;
+    case CMD_MASK_DELETE: case CMD_MASK_TOGGLE: *en = l && l->mask; break;
     case CMD_CLIP_GROUP: *en = l && d->s.active > 0 && !l->clip && !l->is_background; break;
     case CMD_CLIP_UNGROUP: *en = l && l->clip; break;
     case CMD_BRING_FRONT: case CMD_BRING_FORWARD: *en = l && !l->is_background && d->s.active < d->s.nlayers - 1; break;
@@ -404,6 +414,51 @@ static void layer_style_quick(PcDoc *d, int which)
     else { pc_hist_goto(d, d->hist_cur); app_refresh(R_ALL); }
 }
 
+/* Layer > New Adjustment Layer: the layer goes in at once so the dialog
+ * previews it; OK records one history state, Cancel leaves no trace. */
+static void new_adjustment_layer(PcDoc *d, int cmd)
+{
+    int type = cmd - CMD_ADJ_BRIGHTNESS_CONTRAST, played;
+    PcAdjust a;
+    PcLayer *l;
+    char label[64];
+    pc_adjust_default(&a, type);
+    played = play_params(&a, sizeof a);
+    a.type = type;
+    l = pc_doc_add_adjustment(d, &a, NULL, d->s.sel != NULL);
+    if (!l) { app_error("Could not make a new layer because there are too many layers or not enough memory."); return; }
+    if (d->s.sel) { remember_selection(d); pc_sel_clear(d); }   /* the selection became the mask */
+    panels_set_mask_target(1);
+    app_refresh(R_CANVAS | R_LAYERS | R_NAV);
+    if (!played && !dlg_adjust_layer(d, &a)) {
+        pc_hist_goto(d, d->hist_cur);
+        panels_set_mask_target(0);
+        app_refresh(R_ALL);
+        return;
+    }
+    l = pc_doc_active(d);                   /* (previews replace the layer structs) */
+    if (l && l->kind == PC_LAYER_ADJUST) l->adj = a;
+    pc_snprintf(label, sizeof label, "New %s Layer", pc_adjust_name(type));
+    commit(d, label);
+    REC(cmd, a);
+}
+
+/* Layer Content Options / double-click on the thumbnail: edit the parameters. */
+static void edit_adjustment_layer(PcDoc *d)
+{
+    PcLayer *l = pc_doc_active(d);
+    PcAdjust a;
+    char label[64];
+    if (!l || l->kind != PC_LAYER_ADJUST || l->adj.type == PC_ADJ_INVERT) return;
+    a = l->adj;
+    if (!dlg_adjust_layer(d, &a)) { app_refresh(R_CANVAS | R_NAV); return; }
+    l = pc_doc_active(d);
+    if (!l || l->kind != PC_LAYER_ADJUST || !memcmp(&l->adj, &a, sizeof a)) return;
+    l->adj = a;
+    pc_snprintf(label, sizeof label, "Modify %s Layer", pc_adjust_name(a.type));
+    commit(d, label);
+}
+
 void cmd_run(int cmd)
 {
     PcDoc *d;
@@ -488,6 +543,7 @@ void cmd_run(int cmd)
     case CMD_WS_SAVE: dock_store_named(); dlg_message(APP_NAME, "The current palette arrangement was saved. Use Window > Workspace > Load Saved Workspace to restore it.", MB_ICON_INFO_, 0); return;
     case CMD_WS_LOAD: if (dock_load_named()) app_error("No workspace has been saved yet."); return;
     case CMD_WIN_ACTIONS: dock_toggle_panel(P_ACTIONS); return;
+    case CMD_WIN_ADJUSTMENTS: dock_toggle_panel(P_ADJUSTMENTS); return;
     case CMD_WIN_BRUSHES: dock_toggle_panel(P_BRUSHES); return;
     case CMD_WIN_CHANNELS: dock_toggle_panel(P_CHANNELS); return;
     case CMD_WIN_COLOR: dock_toggle_panel(P_COLOR); return;
@@ -542,7 +598,7 @@ void cmd_run(int cmd)
     case CMD_CLEAR: if (layer_editable(d, "Clear") && !pc_clear(d, g_app.bg)) { commit(d, "Clear"); REC0(cmd); } return;
     case CMD_FILL: {
         struct { int use, opacity, blend, preserve; } p = { 0, 100, 0, 0 };
-        if (!layer_editable(d, "Fill")) return;
+        if (!(pc_layer_is_adjust(l) && l->mask) && !layer_editable(d, "Fill")) return;   /* adjustment: fills the mask */
         if (!play_params(&p, sizeof p) && !dlg_fill(&p.use, &p.opacity, &p.blend, &p.preserve)) return;
         {
             int rc;
@@ -559,7 +615,7 @@ void cmd_run(int cmd)
     }
     case CMD_STROKE: {
         struct { int width, location, opacity, blend; } p = { 1, 1, 100, 0 };
-        if (!layer_editable(d, "Stroke")) return;
+        if (!(pc_layer_is_adjust(l) && l->mask) && !layer_editable(d, "Stroke")) return;
         if (!play_params(&p, sizeof p) && !dlg_stroke(&p.width, &p.location, &p.opacity, &p.blend)) return;
         if (!pc_stroke_selection(d, p.width, p.location, g_app.fg, p.opacity, p.blend)) { commit(d, "Stroke"); REC(cmd, p); }
         return;
@@ -676,7 +732,7 @@ void cmd_run(int cmd)
     case CMD_POSTERIZE: {
         int lv = 4;
         if (!layer_editable(d, "Posterize")) return;
-        if (!play_params(&lv, sizeof lv) && !dlg_posterize(&lv)) return;
+        if (!play_params(&lv, sizeof lv) && !dlg_posterize(d, &lv)) return;
         if (!pc_adj_posterize(d, lv)) { commit(d, "Posterize"); REC(cmd, lv); }
         return;
     }
@@ -812,6 +868,11 @@ void cmd_run(int cmd)
     case CMD_MERGE_DOWN: if (!pc_doc_merge_down(d, d->s.active)) { commit(d, "Merge Down"); REC0(cmd); } return;
     case CMD_MERGE_VISIBLE: if (!pc_doc_merge_visible(d)) { commit(d, "Merge Visible"); REC0(cmd); } return;
     case CMD_FLATTEN: if (!pc_doc_flatten(d)) { panels_set_mask_target(0); commit(d, "Flatten Image"); REC0(cmd); } return;
+    case CMD_ADJ_BRIGHTNESS_CONTRAST: case CMD_ADJ_LEVELS: case CMD_ADJ_CURVES: case CMD_ADJ_COLOR_BALANCE: case CMD_ADJ_HUE_SAT:
+    case CMD_ADJ_CHANNEL_MIXER: case CMD_ADJ_INVERT: case CMD_ADJ_THRESHOLD: case CMD_ADJ_POSTERIZE:
+        new_adjustment_layer(d, cmd);
+        return;
+    case CMD_ADJ_EDIT: edit_adjustment_layer(d); return;
     /* ---- Type ---- */
     case CMD_TYPE_EDIT: {
         PcText t;

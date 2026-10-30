@@ -53,7 +53,60 @@ const char *pc_blend_name(int blend);        /* "Normal", "Multiply", ... */
 const char *pc_blend_psd_key(int blend);     /* "norm", "mul ", ... (4 chars) */
 int pc_blend_from_psd_key(const char *key4); /* unknown -> NORMAL */
 
-typedef enum { PC_LAYER_PIXEL = 0, PC_LAYER_TEXT = 1 } PcLayerKind;
+typedef enum { PC_LAYER_PIXEL = 0, PC_LAYER_TEXT = 1, PC_LAYER_ADJUST = 2 } PcLayerKind;
+
+/* ---------------- adjustment parameters ---------------- */
+
+/* Shared by Image > Adjust (destructive, pcops.h) and adjustment layers. */
+typedef struct PcLevels {
+    int in_black[4], in_white[4];   /* [0] = composite RGB, 1..3 = R,G,B */
+    float gamma[4];
+    int out_black[4], out_white[4];
+} PcLevels;
+
+typedef struct PcCurve { int n; int x[16], y[16]; } PcCurve;   /* points sorted by x, 0..255 */
+typedef struct PcCurves { PcCurve c[4]; } PcCurves;            /* [0] composite */
+
+typedef struct PcColorBalance {
+    int v[3][3];     /* [shadows/midtones/highlights][cyan-red, magenta-green, yellow-blue] -100..100 */
+    int preserve_luminosity;
+} PcColorBalance;
+
+typedef struct PcHueSat {
+    int hue[7], sat[7], light[7];   /* [0] master, 1..6 reds yellows greens cyans blues magentas */
+    int colorize;                   /* uses hue[0] 0..360, sat[0] 0..100, light[0] */
+} PcHueSat;
+
+/* Adjustment layer types: the ones Photoshop 5.0 (1998) offered, in this order. */
+enum {
+    PC_ADJ_BRIGHTNESS_CONTRAST, PC_ADJ_LEVELS, PC_ADJ_CURVES, PC_ADJ_COLOR_BALANCE, PC_ADJ_HUE_SAT,
+    PC_ADJ_CHANNEL_MIXER, PC_ADJ_INVERT, PC_ADJ_THRESHOLD, PC_ADJ_POSTERIZE, PC_ADJ_COUNT
+};
+
+typedef struct PcAdjust {
+    int type;                       /* PC_ADJ_*; only the matching fields are used */
+    int brightness, contrast;       /* -100..100 */
+    PcLevels levels;
+    PcCurves curves;
+    PcColorBalance balance;
+    PcHueSat huesat;
+    int mixer[3][4];                /* output R,G,B from source R,G,B %, last = constant % */
+    int mixer_mono;
+    int threshold;                  /* 1..255 */
+    int posterize;                  /* 2..255 */
+} PcAdjust;
+
+/* Prepared form: lookup tables or a per-pixel function (adjust.c). */
+typedef struct PcAdjPrep {
+    int type, use_lut;
+    u8 lut[3][256];
+    PcAdjust a;
+} PcAdjPrep;
+
+const char *pc_adjust_name(int type);            /* "Brightness/Contrast", ... */
+void pc_adjust_default(PcAdjust *a, int type);   /* identity parameters (Threshold 128, Posterize 4) */
+void pc_adjust_prepare(const PcAdjust *a, PcAdjPrep *p);
+void pc_adjust_pixel(const PcAdjPrep *p, u8 *rgb);    /* in place, 3 bytes */
 
 typedef struct PcText {
     char text[1024];      /* lines separated by '\n' */
@@ -85,6 +138,7 @@ typedef struct PcLayer {
     int clip;             /* clipped to the layer below (PS5 clipping group) */
     int kind;             /* PcLayerKind */
     PcText text;
+    PcAdjust adj;         /* PC_LAYER_ADJUST: pix is NULL; the mask says where it applies */
     /* Layer style (a 1998-sized subset: drop shadow, inner shadow, outer glow, bevel). */
     int fx_enabled;
     int fx_shadow, fx_shadow_opacity, fx_shadow_angle, fx_shadow_dist, fx_shadow_blur;
@@ -165,14 +219,20 @@ PcDoc *pc_doc_new(int w, int h, int mode, double dpi, int fill, u32 rgb);
 void pc_doc_free(PcDoc *d);
 
 PcLayer *pc_layer_new(int w, int h, const char *name);
+PcLayer *pc_layer_new_adjust(const PcAdjust *a, const char *name);   /* no pixels, no mask */
 PcLayer *pc_layer_clone(const PcLayer *l);      /* shares buffers */
 void pc_layer_free(PcLayer *l);
-u8 *pc_layer_pixels_w(PcLayer *l);              /* writable RGBA pointer or NULL */
+u8 *pc_layer_pixels_w(PcLayer *l);              /* writable RGBA pointer or NULL (also for adjustment layers) */
+static inline int pc_layer_is_adjust(const PcLayer *l) { return l && l->kind == PC_LAYER_ADJUST; }
 u8 *pc_layer_mask_w(PcLayer *l);                /* writable mask pointer or NULL (no mask/OOM) */
 
 PcLayer *pc_doc_active(PcDoc *d);
 int pc_doc_insert_layer(PcDoc *d, int index, PcLayer *l);  /* takes ownership; returns 0 ok */
 PcLayer *pc_doc_add_layer(PcDoc *d, const char *name);     /* above active, becomes active */
+/* Adjustment layer above the active layer (becomes active) with a layer mask:
+ * the selection when from_selection and there is one, else reveal all.
+ * name NULL = the type's name. */
+PcLayer *pc_doc_add_adjustment(PcDoc *d, const PcAdjust *a, const char *name, int from_selection);
 int pc_doc_delete_layer(PcDoc *d, int index);
 int pc_doc_move_layer(PcDoc *d, int from, int to);
 int pc_doc_duplicate_layer(PcDoc *d, int index);
@@ -189,6 +249,7 @@ void pc_doc_unique_layer_name(PcDoc *d, char *out, size_t n);  /* "Layer N" */
  * computed into the full-size buffer `out` (which must be w*h RGBA). */
 typedef struct { int x0, y0, x1, y1; } PcRect;   /* half-open */
 PcBuf *pc_doc_composite(const PcDoc *d);
+PcBuf *pc_doc_composite_below(const PcDoc *d, int index);   /* visible layers under index */
 void pc_doc_composite_into(const PcDoc *d, PcBuf *out, const PcRect *r);
 /* Composite against the transparency checkerboard or a flat colour, as BGRX
  * scanlines for the display (top-down). */

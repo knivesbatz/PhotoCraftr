@@ -276,7 +276,7 @@ void app_apply_channel_restriction(DocView *v, const PcDocState *before)
     li = v->doc->s.active;
     if (li < 0 || li >= v->doc->s.nlayers || li >= before->nlayers) return;
     l = v->doc->s.layers[li];
-    if (l->pix == before->layers[li]->pix) return;
+    if (!l->pix || !before->layers[li]->pix || l->pix == before->layers[li]->pix) return;   /* (adjustment layers: no pixels) */
     p = pc_layer_pixels_w(l);
     if (!p) return;
     n = (size_t)v->doc->s.w * v->doc->s.h;
@@ -323,6 +323,7 @@ u32 app_sample_color(DocView *v, int x, int y, int size, int merged)
     int r = size == 2 ? 2 : size == 1 ? 1 : 0, i, j, n = 0;
     unsigned acc[3] = { 0, 0, 0 };
     if (x < 0 || y < 0 || x >= d->s.w || y >= d->s.h) return g_app.fg;
+    if (!merged && pc_layer_is_adjust(pc_doc_active(d))) merged = 1;     /* nothing of its own to sample */
     if (merged) { if (!v->comp || v->comp_rev != d->revision) { pc_buf_unref(v->comp); v->comp = pc_doc_composite(d); v->comp_rev = d->revision; } b = v->comp; }
     else { PcLayer *l = pc_doc_active(d); b = l ? l->pix : NULL; }
     if (!b) return g_app.fg;

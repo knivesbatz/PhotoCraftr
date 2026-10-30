@@ -118,7 +118,8 @@ PcStroke *pc_stroke_begin(PcDoc *d, const PcPaintOpts *o, float x, float y)
     s->d = d; s->l = l; s->o = *o; s->w = d->s.w; s->h = d->s.h;
     s->rng = 0x9E3779B9u ^ (unsigned)(x * 31 + y * 17);
     s->target = o->target_mask == 3 ? TARGET_CHANNEL : o->target_mask == 2 ? TARGET_QUICKMASK :
-                (o->target_mask && l && l->mask) ? TARGET_MASK : TARGET_LAYER;
+                ((o->target_mask || pc_layer_is_adjust(l)) && l && l->mask) ? TARGET_MASK : TARGET_LAYER;
+    /* (An adjustment layer has no pixels: painting always edits its mask.) */
     if (s->target == TARGET_CHANNEL && (o->channel < 0 || o->channel >= d->s.nchannels)) { free(s); return NULL; }
     if (s->target == TARGET_LAYER) {
         if (!l || l->lock_pixels) { free(s); return NULL; }
@@ -148,7 +149,8 @@ PcStroke *pc_stroke_begin(PcDoc *d, const PcPaintOpts *o, float x, float y)
         if (s->src_pix) {
             if (src) memcpy(s->src_pix, src->px, n * 4);
             else if (s->ch == 4) memcpy(s->src_pix, s->orig, n * 4);
-            else memcpy(s->src_pix, l->pix->px, n * 4);
+            else if (l && l->pix) memcpy(s->src_pix, l->pix->px, n * 4);
+            else memset(s->src_pix, 0, n * 4);
         }
         pc_buf_unref(src);
         if (g_clone_x >= 0 && g_clone_doc == d) {

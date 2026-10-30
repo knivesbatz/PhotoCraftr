@@ -229,7 +229,8 @@ int pc_sel_magic_wand(PcDoc *d, int x, int y, int tol, int contiguous, int merge
     u8 *m;
     PcLayer *l = pc_doc_active(d);
     if (x < 0 || y < 0 || x >= d->s.w || y >= d->s.h) return -1;
-    src = merged ? pc_doc_composite(d) : (l ? pc_buf_ref(l->pix) : NULL);
+    /* An adjustment layer has no pixels of its own: sample what is seen. */
+    src = (merged || (l && !l->pix)) ? pc_doc_composite(d) : (l ? pc_buf_ref(l->pix) : NULL);
     if (!src) return -1;
     m = region_mask(src->px, d->s.w, d->s.h, x, y, PC_CLAMP(tol, 0, 255), contiguous);
     pc_buf_unref(src);
@@ -333,15 +334,17 @@ int pc_sel_grow(PcDoc *d, int tol, int similar)
     PcBuf *s = d->s.sel;
     int w = d->s.w, h = d->s.h, x, y;
     u8 *acc;
+    PcBuf *src;
     if (!s || !l) return -1;
-    acc = new_mask(d);
-    if (!acc) return -1;
+    src = l->pix ? pc_buf_ref(l->pix) : pc_doc_composite(d);
+    acc = src ? new_mask(d) : NULL;
+    if (!acc) { pc_buf_unref(src); return -1; }
     /* Grow from every selected pixel's colour (sampled sparsely for speed). */
     for (y = 0; y < h; y += 2)
         for (x = 0; x < w; x += 2) {
             if (s->px[(size_t)y * w + x] < 128 || acc[(size_t)y * w + x]) continue;
             {
-                u8 *m = region_mask(l->pix->px, w, h, x, y, tol, !similar);
+                u8 *m = region_mask(src->px, w, h, x, y, tol, !similar);
                 size_t i, n = (size_t)w * h;
                 if (!m) continue;
                 for (i = 0; i < n; i++) if (m[i]) acc[i] = 255;
@@ -349,6 +352,7 @@ int pc_sel_grow(PcDoc *d, int tol, int similar)
             }
             if (similar) break;
         }
+    pc_buf_unref(src);
     return finish(d, acc, PC_SEL_ADD, 0);
 }
 
@@ -408,6 +412,6 @@ int pc_sel_from_layer_alpha(PcDoc *d, int layer, int op)
     l = d->s.layers[layer];
     m = new_mask(d);
     if (!m) return -1;
-    for (i = 0; i < n; i++) m[i] = l->pix->px[i * 4 + 3];
+    for (i = 0; i < n; i++) m[i] = l->pix ? l->pix->px[i * 4 + 3] : (l->mask ? l->mask->px[i] : 255);
     return finish(d, m, op, 0);
 }

@@ -20,9 +20,11 @@ static int xform_doc(PcDoc *d, int nw, int nh, BufXform fn, void *ctx)
     pc_state_copy(&ns, &d->s);
     for (i = 0; i < ns.nlayers; i++) {
         PcLayer *l = ns.layers[i];
-        nb = fn(l->pix, nw, nh, ctx);
-        if (!nb) goto fail;
-        pc_buf_unref(l->pix); l->pix = nb;
+        if (l->pix) {                           /* (adjustment layers have none) */
+            nb = fn(l->pix, nw, nh, ctx);
+            if (!nb) goto fail;
+            pc_buf_unref(l->pix); l->pix = nb;
+        }
         if (l->mask) {
             nb = fn(l->mask, nw, nh, ctx);
             if (!nb) goto fail;
@@ -174,7 +176,7 @@ int pc_image_resize(PcDoc *d, int nw, int nh, int method, double dpi)
     /* Text layers become pixels when resampled (their geometry changed). */
     if (!rc) {
         int i;
-        for (i = 0; i < d->s.nlayers; i++) d->s.layers[i]->kind = PC_LAYER_PIXEL;
+        for (i = 0; i < d->s.nlayers; i++) if (d->s.layers[i]->kind == PC_LAYER_TEXT) d->s.layers[i]->kind = PC_LAYER_PIXEL;
     }
     return rc;
 }
@@ -263,7 +265,7 @@ int pc_image_rotate(PcDoc *d, int q)
     q = ((q % 4) + 4) % 4;
     if (!q) return 0;
     rc = xform_doc(d, q == 2 ? d->s.w : d->s.h, q == 2 ? d->s.h : d->s.w, xf_rot, &q);
-    if (!rc) for (i = 0; i < d->s.nlayers; i++) d->s.layers[i]->kind = PC_LAYER_PIXEL;
+    if (!rc) for (i = 0; i < d->s.nlayers; i++) if (d->s.layers[i]->kind == PC_LAYER_TEXT) d->s.layers[i]->kind = PC_LAYER_PIXEL;
     return rc;
 }
 
@@ -283,7 +285,7 @@ static PcBuf *xf_flip(const PcBuf *b, int nw, int nh, void *ctx)
 int pc_image_flip(PcDoc *d, int vertical)
 {
     int rc = xform_doc(d, d->s.w, d->s.h, xf_flip, &vertical), i;
-    if (!rc) for (i = 0; i < d->s.nlayers; i++) d->s.layers[i]->kind = PC_LAYER_PIXEL;
+    if (!rc) for (i = 0; i < d->s.nlayers; i++) if (d->s.layers[i]->kind == PC_LAYER_TEXT) d->s.layers[i]->kind = PC_LAYER_PIXEL;
     return rc;
 }
 
@@ -356,7 +358,7 @@ int pc_image_rotate_arbitrary(PcDoc *d, double deg, u32 bg)
     c.deg = deg;
     rc = xform_doc(d, nw, nh, xf_rot_any, &c);
     if (!rc) {
-        for (i = 0; i < d->s.nlayers; i++) d->s.layers[i]->kind = PC_LAYER_PIXEL;
+        for (i = 0; i < d->s.nlayers; i++) if (d->s.layers[i]->kind == PC_LAYER_TEXT) d->s.layers[i]->kind = PC_LAYER_PIXEL;
         if (d->s.nlayers && d->s.layers[0]->is_background) {
             u8 *p = pc_layer_pixels_w(d->s.layers[0]);
             size_t k, n = (size_t)nw * nh;
@@ -378,6 +380,7 @@ int pc_image_rotate_arbitrary(PcDoc *d, double deg, u32 bg)
 int pc_layer_bounds(const PcLayer *l, int w, int h, PcRect *r)
 {
     int x, y, x0 = w, y0 = h, x1 = -1, y1 = -1;
+    if (!l->pix) { r->x0 = 0; r->y0 = 0; r->x1 = w; r->y1 = h; return 1; }   /* adjustment: whole canvas */
     for (y = 0; y < h; y++) {
         const u8 *p = l->pix->px + (size_t)y * w * 4;
         for (x = 0; x < w; x++, p += 4)
@@ -394,20 +397,24 @@ int pc_layer_offset(PcDoc *d, int dx, int dy)
     PcBuf *nb;
     int x, y, w = d->s.w, h = d->s.h;
     if (!l || l->lock_position || l->is_background) return -1;
-    nb = pc_buf_new(w, h, 4, 1);
-    if (!nb) return -1;
-    for (y = 0; y < h; y++) {
-        int sy = y - dy;
-        if (sy < 0 || sy >= h) continue;
-        for (x = 0; x < w; x++) {
-            int sx = x - dx;
-            if (sx < 0 || sx >= w) continue;
-            memcpy(nb->px + ((size_t)y * w + x) * 4, l->pix->px + ((size_t)sy * w + sx) * 4, 4);
+    if (!l->pix && !l->mask) return -1;
+    if (l->pix) {
+        nb = pc_buf_new(w, h, 4, 1);
+        if (!nb) return -1;
+        for (y = 0; y < h; y++) {
+            int sy = y - dy;
+            if (sy < 0 || sy >= h) continue;
+            for (x = 0; x < w; x++) {
+                int sx = x - dx;
+                if (sx < 0 || sx >= w) continue;
+                memcpy(nb->px + ((size_t)y * w + x) * 4, l->pix->px + ((size_t)sy * w + sx) * 4, 4);
+            }
         }
+        pc_buf_unref(l->pix);
+        l->pix = nb;
     }
-    pc_buf_unref(l->pix);
-    l->pix = nb;
-    if (l->mask && l->mask_linked) {
+    /* An adjustment layer moves its mask (outside it the mask hides). */
+    if (l->mask && (l->mask_linked || !l->pix)) {
         PcBuf *nm = pc_buf_new(w, h, 1, 0);
         if (nm) {
             memset(nm->px, 0, (size_t)w * h);
@@ -571,8 +578,10 @@ int pc_doc_to_gray(PcDoc *d)
     if (d->s.mode == PC_MODE_GRAY) return -1;
     for (i = 0; i < d->s.nlayers; i++) {
         PcLayer *l = d->s.layers[i];
-        u8 *p = pc_layer_pixels_w(l);
+        u8 *p;
         size_t k, n = (size_t)d->s.w * d->s.h;
+        if (!l->pix) continue;                  /* adjustment layer */
+        p = pc_layer_pixels_w(l);
         if (!p) return -1;
         for (k = 0; k < n; k++, p += 4) p[0] = p[1] = p[2] = (u8)pc_luma(p[0], p[1], p[2]);
         l->text.color = (u32)pc_luma(pc_r(l->text.color), pc_g(l->text.color), pc_b(l->text.color)) * 0x010101u;

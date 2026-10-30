@@ -1,3 +1,22 @@
+Since 0.1.0 (not yet released)
+==============================
+
+- Adjustment layers: Brightness/Contrast, Levels, Curves, Color Balance,
+  Hue/Saturation, Channel Mixer, Invert, Threshold and Posterize, the types
+  Photoshop 5.0 had. Layer > New Adjustment Layer opens the adjustment's
+  dialog with a live preview; the layer keeps its settings (Layer > Layer
+  Content Options or a double-click on its thumbnail changes them) and has
+  a mask that the painting tools, fills and gradients edit. Opacity, blend
+  modes, clipping groups and visibility apply. Merge Down, Merge Visible
+  and Flatten bake them in.
+- Adjustments panel (Window > Adjustments): one button per type, placed
+  above Layers in Essentials and grouped with Layers in 1998 Palettes.
+  Workspaces saved by 0.1.0 still load and gain the new panel.
+- PSD files keep adjustment layers, written with Photoshop's own
+  adjustment blocks; the flattened image in the file includes them.
+- Posterize and Channel Mixer now preview live; typed values in Levels
+  preview too.
+
 PhotoCraft Classic 0.1.0
 ========================
 

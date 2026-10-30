@@ -102,6 +102,17 @@ PcLayer *pc_layer_new(int w, int h, const char *name)
     return l;
 }
 
+PcLayer *pc_layer_new_adjust(const PcAdjust *a, const char *name)
+{
+    PcLayer *l = (PcLayer *)calloc(1, sizeof *l);
+    if (!l) return NULL;
+    layer_defaults(l);
+    l->kind = PC_LAYER_ADJUST;
+    l->adj = *a;
+    pc_strlcpy(l->name, name ? name : pc_adjust_name(a->type), sizeof l->name);
+    return l;
+}
+
 PcLayer *pc_layer_clone(const PcLayer *s)
 {
     PcLayer *l = (PcLayer *)malloc(sizeof *l);
@@ -122,7 +133,7 @@ void pc_layer_free(PcLayer *l)
 
 u8 *pc_layer_pixels_w(PcLayer *l)
 {
-    PcBuf *b = pc_buf_writable(&l->pix);
+    PcBuf *b = l->pix ? pc_buf_writable(&l->pix) : NULL;
     return b ? b->px : NULL;
 }
 
@@ -257,6 +268,30 @@ PcLayer *pc_doc_add_layer(PcDoc *d, const char *name)
     return l;
 }
 
+PcLayer *pc_doc_add_adjustment(PcDoc *d, const PcAdjust *a, const char *name, int from_selection)
+{
+    char nm[64];
+    PcLayer *l;
+    if (!name) {
+        /* "Levels 1", "Levels 2", ... like Photoshop. */
+        int k, i, used;
+        for (k = 1; k < 10000; k++) {
+            pc_snprintf(nm, sizeof nm, "%s %d", pc_adjust_name(a->type), k);
+            for (used = 0, i = 0; i < d->s.nlayers; i++) if (!strcmp(d->s.layers[i]->name, nm)) used = 1;
+            if (!used) break;
+        }
+        name = nm;
+    }
+    l = pc_layer_new_adjust(a, name);
+    if (!l) return NULL;
+    l->mask = from_selection && d->s.sel ? pc_buf_clone(d->s.sel) : pc_buf_new(d->s.w, d->s.h, 1, 0);
+    if (!l->mask) { pc_layer_free(l); return NULL; }
+    if (!(from_selection && d->s.sel)) memset(l->mask->px, 255, (size_t)d->s.w * d->s.h);
+    l->mask_enabled = 1;
+    if (pc_doc_insert_layer(d, d->s.active + 1, l)) return NULL;
+    return l;
+}
+
 int pc_doc_delete_layer(PcDoc *d, int index)
 {
     int i;
@@ -306,6 +341,8 @@ int pc_doc_merge_down(PcDoc *d, int index)
     PcLayer *below;
     if (index <= 0 || index >= d->s.nlayers) return -1;
     below = d->s.layers[index - 1];
+    if (below->kind == PC_LAYER_ADJUST) return -1;      /* Photoshop refuses this too */
+    /* An adjustment layer bakes into the layer below (composite of the two). */
     m = composite_range(d, index - 1, index, 0);
     if (!m) return -1;
     if (below->is_background) {
@@ -342,6 +379,7 @@ int pc_doc_merge_visible(PcDoc *d)
     }
     {
         PcLayer *l = d->s.layers[first];
+        /* (An adjustment layer kept as the merge target becomes a pixel layer.) */
         pc_buf_unref(l->pix); l->pix = m;
         pc_buf_unref(l->mask); l->mask = NULL;
         l->opacity = 255; l->blend = PC_BLEND_NORMAL; l->kind = PC_LAYER_PIXEL; l->fx_enabled = 0;
@@ -427,7 +465,7 @@ int pc_doc_apply_mask(PcDoc *d, int index, int apply)
     l = d->s.layers[index];
     if (!l->mask) return -1;
     if (apply) {
-        u8 *p = pc_layer_pixels_w(l);
+        u8 *p = pc_layer_pixels_w(l);           /* NULL for adjustment layers: nothing to apply to */
         size_t i, n = (size_t)d->s.w * d->s.h;
         if (!p) return -1;
         for (i = 0; i < n; i++) p[i * 4 + 3] = (u8)pc_mul255(p[i * 4 + 3], l->mask->px[i]);
@@ -465,6 +503,12 @@ static PcBuf *composite_range(const PcDoc *d, int from, int to, int visible_only
         pc_doc_composite_into(&tmp, out, NULL);
     }
     return out;
+}
+
+PcBuf *pc_doc_composite_below(const PcDoc *d, int index)
+{
+    if (index <= 0) return pc_buf_new(d->s.w, d->s.h, 4, 1);
+    return composite_range(d, 0, PC_MIN(index, d->s.nlayers) - 1, 1);
 }
 
 PcBuf *pc_doc_composite(const PcDoc *d)
@@ -633,7 +677,7 @@ size_t pc_doc_memory(const PcDoc *d)
     size_t n = 0;
     int i;
     for (i = 0; i < d->s.nlayers; i++) {
-        n += (size_t)d->s.w * d->s.h * 4;
+        if (d->s.layers[i]->pix) n += (size_t)d->s.w * d->s.h * 4;
         if (d->s.layers[i]->mask) n += (size_t)d->s.w * d->s.h;
     }
     return n;

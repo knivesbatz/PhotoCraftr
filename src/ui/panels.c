@@ -15,13 +15,15 @@ void actions_panel_buttons(int which);
 void dock_classic_workspace(void);
 
 static const char *const k_names[P_COUNT] = {
-    "Navigator", "Info", "Color", "Swatches", "Brushes", "Layers", "Channels", "Paths", "History", "Actions"
+    "Navigator", "Info", "Color", "Swatches", "Brushes", "Layers", "Channels", "Paths", "History", "Actions",
+    "Adjustments"
 };
 static const int k_icons[P_COUNT] = {
     PC_ICON_PANEL_NAVIGATOR, PC_ICON_PANEL_INFO, PC_ICON_PANEL_COLOR, PC_ICON_PANEL_SWATCHES, PC_ICON_PANEL_BRUSHES,
-    PC_ICON_PANEL_LAYERS, PC_ICON_PANEL_CHANNELS, PC_ICON_PANEL_PATHS, PC_ICON_PANEL_HISTORY, PC_ICON_PANEL_ACTIONS
+    PC_ICON_PANEL_LAYERS, PC_ICON_PANEL_CHANNELS, PC_ICON_PANEL_PATHS, PC_ICON_PANEL_HISTORY, PC_ICON_PANEL_ACTIONS,
+    PC_ICON_PANEL_ADJUSTMENTS
 };
-static const int k_pref_h[P_COUNT] = { 140, 92, 92, 92, 120, 240, 150, 120, 180, 180 };
+static const int k_pref_h[P_COUNT] = { 140, 92, 92, 92, 120, 240, 150, 120, 180, 180, 46 };
 
 const char *panel_name(int p) { return (p >= 0 && p < P_COUNT) ? k_names[p] : ""; }
 int panel_icon(int p) { return (p >= 0 && p < P_COUNT) ? k_icons[p] : -1; }
@@ -641,19 +643,25 @@ static void layers_paint(HDC dc, const RECT *r)
         SetRect(&tgt, eye.right, y, eye.right + 18, y + LAYER_ROW - 1);
         w95_fill(dc, &tgt, W95_FACE);
         w95_thin_raised(dc, &tgt);
-        if (sel) w95_icon(dc, g_mask_target && l->mask ? PC_ICON_MASK_SMALL : PC_ICON_BRUSH_SMALL, tgt.left + 2, y + 7);
+        if (sel) w95_icon(dc, (g_mask_target || l->kind == PC_LAYER_ADJUST) && l->mask ? PC_ICON_MASK_SMALL : PC_ICON_BRUSH_SMALL, tgt.left + 2, y + 7);
         if (l->clip) w95_icon(dc, PC_ICON_LINK, tgt.left + 5, y + 7);
         SetRect(&nm, tgt.right, y, row.right, y + LAYER_ROW - 1);
         w95_fill(dc, &nm, sel ? W95_SELBK : W95_WINDOW);
         SetRect(&th, nm.left + 3, y + 3, nm.left + 25, y + LAYER_ROW - 4);
         if (l->kind == PC_LAYER_TEXT) w95_icon(dc, PC_ICON_TEXT_LAYER, th.left + 3, y + 6);
+        else if (l->kind == PC_LAYER_ADJUST) {
+            /* Adjustment layer: its type's icon on a raised button face. */
+            w95_fill(dc, &th, W95_FACE);
+            w95_thin_raised(dc, &th);
+            w95_icon(dc, adjust_icon(l->adj.type), th.left + 3, y + 6);
+        }
         else { w95_fill(dc, &th, W95_WINDOW); draw_thumb(dc, &th, l->pix, 1); }
         nm.left = th.right + 4;
         if (l->mask) {
             RECT mt;
             SetRect(&mt, nm.left, y + 3, nm.left + 22, y + LAYER_ROW - 4);
             draw_thumb(dc, &mt, l->mask, 0);
-            if (sel && g_mask_target) w95_rect(dc, mt.left - 2, mt.top - 2, mt.right + 2, mt.bottom + 2, W95_SELTEXT);
+            if (sel && (g_mask_target || l->kind == PC_LAYER_ADJUST)) w95_rect(dc, mt.left - 2, mt.top - 2, mt.right + 2, mt.bottom + 2, W95_SELTEXT);
             if (!l->mask_enabled) { w95_hline(dc, mt.left, mt.right, mt.top + 1, RGB(255, 0, 0)); w95_pixel(dc, mt.left, mt.bottom - 1, RGB(255, 0, 0)); }
             nm.left = mt.right + 4;
         }
@@ -690,7 +698,7 @@ static void layer_context_menu(HWND hwnd, int sx, int sy)
         { 1, CMD_LAYER_PROPS, NULL }, { 1, CMD_LAYER_STYLE, NULL }, { 1, 0, "-" },
         { 1, CMD_DUPLICATE_LAYER, NULL }, { 1, CMD_DELETE_LAYER, NULL }, { 1, 0, "-" },
         { 1, CMD_MASK_REVEAL_ALL, "Add Layer Mask" }, { 1, CMD_MASK_APPLY, "Apply Layer Mask" }, { 1, CMD_MASK_TOGGLE, NULL }, { 1, 0, "-" },
-        { 1, CMD_TYPE_RASTERIZE, NULL }, { 1, CMD_CLIP_GROUP, NULL }, { 1, 0, "-" },
+        { 1, CMD_ADJ_EDIT, NULL }, { 1, CMD_TYPE_RASTERIZE, NULL }, { 1, CMD_CLIP_GROUP, NULL }, { 1, 0, "-" },
         { 1, CMD_MERGE_DOWN, NULL }, { 1, CMD_MERGE_VISIBLE, NULL }, { 1, CMD_FLATTEN, NULL }
     };
     int cmd = menu_popup_items(items, (int)(sizeof items / sizeof items[0]), sx, sy, hwnd);
@@ -749,7 +757,7 @@ static void layers_mouse(HWND hwnd, const RECT *r, UINT msg, int x, int y, WPARA
         if (l->mask) {
             /* Clicking the mask thumbnail targets the mask; the image thumbnail the pixels. */
             int mx0 = 38 + 3 + 22 + 4;
-            g_mask_target = col >= mx0 && col < mx0 + 22;
+            g_mask_target = (col >= mx0 && col < mx0 + 22) || l->kind == PC_LAYER_ADJUST;   /* adjustments: always the mask */
             if (g_mask_target && (wp & MK_SHIFT)) { l->mask_enabled = !l->mask_enabled; app_commit(d, l->mask_enabled ? "Enable Layer Mask" : "Disable Layer Mask"); return; }
         }
         g_lay_drag = l->is_background ? -1 : li;
@@ -765,7 +773,8 @@ static void layers_mouse(HWND hwnd, const RECT *r, UINT msg, int x, int y, WPARA
     if (msg == WM_LBUTTONDBLCLK && li >= 0) {
         int col = x - area.left;
         d->s.active = li;
-        if (col >= 38 && col < 38 + 28) cmd_run(d->s.layers[li]->kind == PC_LAYER_TEXT ? CMD_TYPE_EDIT : CMD_LAYER_STYLE);
+        if (col >= 38 && col < 38 + 28)
+            cmd_run(d->s.layers[li]->kind == PC_LAYER_TEXT ? CMD_TYPE_EDIT : d->s.layers[li]->kind == PC_LAYER_ADJUST ? CMD_ADJ_EDIT : CMD_LAYER_STYLE);
         else if (col >= 38) cmd_run(d->s.layers[li]->is_background ? CMD_LAYER_FROM_BG : CMD_LAYER_PROPS);
         return;
     }
@@ -1064,6 +1073,109 @@ static void history_mouse(HWND hwnd, const RECT *r, UINT msg, int x, int y)
     if (!pc_hist_goto(d, hi)) app_refresh(R_CANVAS | R_LAYERS | R_HISTORY | R_CHANNELS | R_PATHS | R_NAV | R_TITLE);
 }
 
+/* ---------------- Adjustments (CS6 placement, one button per 1998 type) ---------------- */
+
+/* Toolbar-style buttons: all nine fit in one row of the 214 px column. */
+#define ADJ_BTN 22
+#define ADJ_GAP 0
+#define ADJ_TOP 18
+static int g_adj_hot = -1, g_adj_pressed = -1, g_adj_ticks;
+static HWND g_adj_hwnd;
+
+int adjust_icon(int type)
+{
+    return PC_ICON_ADJ_BRIGHTNESS + PC_CLAMP(type, 0, PC_ADJ_COUNT - 1);
+}
+
+static int adj_cols(const RECT *r) { return PC_MAX(1, (r->right - r->left - 8 + ADJ_GAP) / (ADJ_BTN + ADJ_GAP)); }
+
+static void adj_rect(const RECT *r, int k, RECT *b)
+{
+    int cols = adj_cols(r), x = r->left + 4 + (k % cols) * (ADJ_BTN + ADJ_GAP), y = r->top + ADJ_TOP + (k / cols) * (ADJ_BTN + ADJ_GAP);
+    SetRect(b, x, y, x + ADJ_BTN, y + ADJ_BTN);
+}
+
+static int adj_hit(const RECT *r, int x, int y)
+{
+    int k;
+    POINT p = { x, y };
+    for (k = 0; k < PC_ADJ_COUNT; k++) {
+        RECT b;
+        adj_rect(r, k, &b);
+        if (PtInRect(&b, p)) return k;
+    }
+    return -1;
+}
+
+static void adjustments_paint(HDC dc, const RECT *r)
+{
+    RECT t;
+    int k, off = app_doc() == NULL;
+    /* Header like CS6: names the hovered adjustment. */
+    SetRect(&t, r->left + 5, r->top + 2, r->right - 4, r->top + ADJ_TOP - 2);
+    w95_text(dc, W95_FONT_NORMAL, g_adj_hot >= 0 ? pc_adjust_name(g_adj_hot) : "Add an adjustment layer", &t,
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, off ? W95_GRAYTEXT : W95_TEXT);
+    for (k = 0; k < PC_ADJ_COUNT; k++) {
+        RECT b;
+        adj_rect(r, k, &b);
+        if (b.bottom > r->bottom) break;
+        w95_draw_icon_button(dc, &b, adjust_icon(k), !off && k == g_adj_pressed && k == g_adj_hot ? 2 : 1, off);
+    }
+}
+
+static void adj_set_hot(HWND hwnd, int k)
+{
+    if (k == g_adj_hot) return;
+    g_adj_hot = k;
+    g_adj_ticks = 0;
+    w95_tooltip_hide();
+    InvalidateRect(hwnd, NULL, FALSE);
+    if (k >= 0) { g_adj_hwnd = hwnd; SetTimer(hwnd, 1, 150, NULL); }
+    else KillTimer(hwnd, 1);
+}
+
+static void adjustments_mouse(HWND hwnd, const RECT *r, UINT msg, int x, int y)
+{
+    int k = adj_hit(r, x, y);
+    if (msg == WM_MOUSEMOVE) { adj_set_hot(hwnd, k); return; }
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+        w95_tooltip_hide();
+        g_adj_pressed = app_doc() ? k : -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+    if (msg == WM_LBUTTONUP) {
+        int p = g_adj_pressed;
+        g_adj_pressed = -1;
+        InvalidateRect(hwnd, NULL, FALSE);
+        UpdateWindow(hwnd);
+        if (p >= 0 && p == k) {
+            adj_set_hot(hwnd, -1);
+            cmd_run(CMD_ADJ_BRIGHTNESS_CONTRAST + p);   /* same as Layer > New Adjustment Layer */
+        }
+    }
+}
+
+/* Hover: tooltip after a moment; notice when the pointer has left. */
+static void adjustments_timer(void)
+{
+    POINT cp;
+    RECT wr;
+    if (!g_adj_hwnd) return;
+    GetCursorPos(&cp);
+    GetWindowRect(g_adj_hwnd, &wr);
+    if (!PtInRect(&wr, cp) || !IsWindowVisible(g_adj_hwnd)) { adj_set_hot(g_adj_hwnd, -1); return; }
+    if (++g_adj_ticks == 4 && g_adj_hot >= 0) {
+        RECT cr, b;
+        POINT p;
+        GetClientRect(g_adj_hwnd, &cr);
+        adj_rect(&cr, g_adj_hot, &b);
+        p.x = b.left + 6; p.y = b.bottom + 3;
+        ClientToScreen(g_adj_hwnd, &p);
+        w95_tooltip_show(g_adj_hwnd, p.x, p.y, pc_adjust_name(g_adj_hot));
+    }
+}
+
 /* ---------------- dispatch ---------------- */
 
 void panel_paint(int p, HDC dc, const RECT *r)
@@ -1078,6 +1190,7 @@ void panel_paint(int p, HDC dc, const RECT *r)
     case P_CHANNELS: channels_paint(dc, r); break;
     case P_PATHS: paths_paint(dc, r); break;
     case P_HISTORY: history_paint(dc, r); break;
+    case P_ADJUSTMENTS: adjustments_paint(dc, r); break;
     case P_ACTIONS: {
         RECT area;
         list_area(r, 0, 1, &area);
@@ -1115,6 +1228,7 @@ void panel_mouse(int p, HWND hwnd, const RECT *r, UINT msg, int x, int y, WPARAM
     case P_CHANNELS: channels_mouse(hwnd, r, msg, x, y); break;
     case P_PATHS: paths_mouse(hwnd, r, msg, x, y); break;
     case P_HISTORY: history_mouse(hwnd, r, msg, x, y); break;
+    case P_ADJUSTMENTS: adjustments_mouse(hwnd, r, msg, x, y); break;
     case P_ACTIONS: {
         int b;
         if (msg == WM_LBUTTONDOWN && (b = bottom_hit(r, 6, x, y)) >= 0) { actions_panel_buttons(b); InvalidateRect(hwnd, NULL, FALSE); return; }
@@ -1156,6 +1270,16 @@ void panel_menu(int p, HWND hwnd, int sx, int sy)
     case P_HISTORY: cmd = menu_popup_items(hist, (int)(sizeof hist / sizeof hist[0]), sx, sy, hwnd); break;
     case P_NAVIGATOR: cmd = menu_popup_items(nav, (int)(sizeof nav / sizeof nav[0]), sx, sy, hwnd); break;
     case P_ACTIONS: actions_panel_menu(hwnd, sx, sy); return;
+    case P_ADJUSTMENTS: {
+        static const MenuItem adj[] = {
+            { 1, CMD_ADJ_BRIGHTNESS_CONTRAST, NULL }, { 1, CMD_ADJ_LEVELS, NULL }, { 1, CMD_ADJ_CURVES, NULL }, { 1, 0, "-" },
+            { 1, CMD_ADJ_COLOR_BALANCE, NULL }, { 1, CMD_ADJ_HUE_SAT, NULL }, { 1, CMD_ADJ_CHANNEL_MIXER, NULL }, { 1, 0, "-" },
+            { 1, CMD_ADJ_INVERT, NULL }, { 1, CMD_ADJ_THRESHOLD, NULL }, { 1, CMD_ADJ_POSTERIZE, NULL }, { 1, 0, "-" },
+            { 1, CMD_ADJ_EDIT, NULL }
+        };
+        cmd = menu_popup_items(adj, (int)(sizeof adj / sizeof adj[0]), sx, sy, hwnd);
+        break;
+    }
     case P_BRUSHES:
         if (menu_popup_items(brushes, 1, sx, sy, hwnd)) { brushes_default(); brushes_save(); dock_refresh(R_ALL); }
         return;
@@ -1195,4 +1319,4 @@ void panel_command(int p, int id, int code, HWND ctl)
     }
 }
 
-void panel_timer(int p) { (void)p; }
+void panel_timer(int p) { if (p == P_ADJUSTMENTS) adjustments_timer(); }
