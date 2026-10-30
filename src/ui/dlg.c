@@ -34,7 +34,7 @@ Dlg *dlg_create(const char *title, int w, int h, DlgChangeFn on_change, void *us
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     d->hwnd = CreateWindowExA(WS_EX_CONTROLPARENT, "PCDialog", title,
-                              WS_POPUP | WS_CLIPCHILDREN, x, y, ow, oh, parent, NULL, w95_inst(), d);
+                              WS_POPUP, x, y, ow, oh, parent, NULL, w95_inst(), d);
     if (!d->hwnd) { free(d); return NULL; }
     SetWindowLongA(d->hwnd, GWL_USERDATA, (LONG)(size_t)d);
     w95_frame_attach(d->hwnd, &d->fr, W95_FRAME_DIALOG | W95_FRAME_CLOSE);

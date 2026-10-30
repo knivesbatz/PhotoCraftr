@@ -225,10 +225,21 @@ int app_save_view(DocView *v, int save_as)
     o.jpeg_quality = g_app.prefs.jpeg_quality;
     pc_strlcpy(path, v->doc->path, sizeof path);
     if (fmt == PC_FMT_UNKNOWN) fmt = PC_FMT_PSD;
-    /* Saving a layered image in a flat format asks for Save As (PS behaviour). */
-    if (save_as == 0 && (!path[0] || (layered && !pc_format_can_layers(fmt)))) save_as = 1;
+    /* Plain Save goes straight to disk only when the document's own file and
+     * format can hold it; a layered image in a flat format asks for Save As
+     * (Photoshop's behaviour), proposing Photoshop format.  The written format
+     * must always agree with the file name's extension. */
+    if (save_as == 0 && (!path[0] || (layered && !pc_format_can_layers(fmt)) || pc_format_from_ext(path) != fmt)) save_as = 1;
+    if (save_as == 1 && layered && !pc_format_can_layers(fmt)) fmt = PC_FMT_PSD;
     if (save_as) {
-        if (!path[0]) pc_snprintf(path, sizeof path, "%s%s.%s", g_app.last_dir, v->doc->title, pc_format_ext(layered ? PC_FMT_PSD : fmt));
+        if (!path[0]) pc_snprintf(path, sizeof path, "%s%s.%s", g_app.last_dir, v->doc->title, pc_format_ext(fmt));
+        else {
+            /* Offer the document name with the extension of the proposed format. */
+            char *dot = strrchr(path, '.');
+            if (dot && dot > strrchr(path, '\\')) *dot = 0;
+            pc_strlcat(path, ".", sizeof path);
+            pc_strlcat(path, pc_format_ext(fmt), sizeof path);
+        }
         if (!dlg_save_file(path, sizeof path, &fmt, layered)) return -1;
         if (!dlg_format_options(fmt, &o)) return -1;
     }

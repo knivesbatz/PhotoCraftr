@@ -185,7 +185,9 @@ static void update_composite(DocView *v)
         return;
     }
     if (v->comp->refs > 1) { PcBuf *c = pc_buf_clone(v->comp); if (c) { pc_buf_unref(v->comp); v->comp = c; } }
-    if (v->dirty.x1 > v->dirty.x0 && !v->dirty_full && v->comp_rev != d->revision) {
+    /* Strokes change pixels before the revision bumps (at stroke end), so a
+     * pending dirty rect is always recomposited. */
+    if (v->dirty.x1 > v->dirty.x0 && !v->dirty_full) {
         pc_doc_composite_into(d, v->comp, &v->dirty);
     } else if (v->comp_rev != d->revision || v->dirty_full) {
         pc_doc_composite_into(d, v->comp, NULL);
