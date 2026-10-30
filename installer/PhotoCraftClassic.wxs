@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<!--
+  PhotoCraft Classic - Windows Installer package (built with wixl by
+  installer/build-msi.sh; see docs/release.md).
+
+  Targets Windows Installer 1.1 (InstallerVersion="110") so it installs on
+  Windows 95/98/Me/NT4 with InstMsiA/InstMsiW, and on 2000..10 natively.
+  build-msi.sh checks the result: page count 110, no tables newer than 1.1
+  (MsiFileHash is dropped), no actions newer than 1.1.
+
+  UpgradeCode is FIXED FOREVER: 499A4A81-3992-4273-A28A-4C80B21994C2.
+  ProductCode changes every build (Id="*"), so every build is a major
+  upgrade of any older (or same-version) build; newer installs block
+  downgrades.  The old product is removed right after InstallInitialize, i.e.
+  INSIDE the installation transaction: if the new version fails, Windows
+  Installer rolls back and the old version is left intact.
+
+  Variables (-D): Version, StageDir (folder with the files to install),
+  HaveNotice (0/1).
+
+  wixl (msitools 0.103) cannot express everything; build-msi.sh applies these
+  with SQL after wixl runs, and then verifies them:
+    - 8.3 short names for every File, Directory and Shortcut ("SHORT|Long"),
+    - RemoveExistingProducts moved to right after InstallInitialize,
+    - the Desktop component's condition DESKTOPSHORTCUT = "1",
+    - removal of MsiFileHash and of post-1.1 standard actions.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="PhotoCraft Classic"
+           Language="1033"
+           Codepage="1252"
+           Version="$(var.Version)"
+           Manufacturer="PhotoCraft Classic contributors"
+           UpgradeCode="499A4A81-3992-4273-A28A-4C80B21994C2">
+
+    <Package InstallerVersion="110"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Languages="1033"
+             SummaryCodepage="1252"
+             Description="PhotoCraft Classic $(var.Version) Setup"
+             Comments="Image editor for Windows 95 through Windows 10. MIT OR Apache-2.0."
+             Manufacturer="PhotoCraft Classic contributors" />
+
+    <Media Id="1" Cabinet="pcc.cab" EmbedCab="yes" />
+
+    <!-- Major upgrade: remove older (and same-version) builds inside the
+         transaction; refuse to install over a newer build. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of PhotoCraft Classic is already installed. Setup will now exit." />
+
+    <!-- ALLUSERS=1 comes from InstallScope="perMachine" above (wixl adds
+         the property itself): Program Files + HKLM.  On Windows 9x
+         without user profiles this is simply "the machine"; on NT it needs
+         an administrator (UAC prompt on Vista and later). -->
+    <Property Id="DESKTOPSHORTCUT" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/knivesbatz/PhotoCraftr" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/knivesbatz/PhotoCraftr/issues" />
+    <Property Id="ARPCOMMENTS" Value="Image editor for Windows 95 through Windows 10" />
+
+    <!-- On an upgrade keep the previous folder and desktop-shortcut choice,
+         unless the caller passes EXPLICITOPTIONS=1 with its own values
+         (Setup.exe does when the user picked a folder). -->
+    <Property Id="PREVINSTALLDIR">
+      <RegistrySearch Id="SearchPrevDir" Root="HKLM" Key="Software\PhotoCraft Classic" Name="InstallDir" Type="raw" />
+    </Property>
+    <Property Id="PREVDESKTOPSHORTCUT">
+      <RegistrySearch Id="SearchPrevShortcut" Root="HKLM" Key="Software\PhotoCraft Classic" Name="DesktopShortcut" Type="raw" />
+    </Property>
+    <CustomAction Id="UsePrevInstallDir" Property="INSTALLDIR" Value="[PREVINSTALLDIR]" />
+    <CustomAction Id="UsePrevShortcut" Property="DESKTOPSHORTCUT" Value="[PREVDESKTOPSHORTCUT]" />
+    <InstallExecuteSequence>
+      <Custom Action="UsePrevInstallDir" After="AppSearch">PREVINSTALLDIR AND NOT EXPLICITOPTIONS</Custom>
+      <Custom Action="UsePrevShortcut" After="UsePrevInstallDir">PREVDESKTOPSHORTCUT AND NOT EXPLICITOPTIONS</Custom>
+    </InstallExecuteSequence>
+    <InstallUISequence>
+      <Custom Action="UsePrevInstallDir" After="AppSearch">PREVINSTALLDIR AND NOT EXPLICITOPTIONS</Custom>
+      <Custom Action="UsePrevShortcut" After="UsePrevInstallDir">PREVDESKTOPSHORTCUT AND NOT EXPLICITOPTIONS</Custom>
+    </InstallUISequence>
+
+    <Icon Id="AppIcon.exe" SourceFile="$(var.StageDir)/PhotoCraftClassic.exe" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLDIR" Name="PhotoCraft Classic">
+
+          <Component Id="AppExe" Guid="728C3B57-B157-45CD-80F5-30408C2953AF">
+            <File Id="PhotoCraftClassic.exe" Name="PhotoCraftClassic.exe"
+                  Source="$(var.StageDir)/PhotoCraftClassic.exe" KeyPath="yes" />
+          </Component>
+
+          <Component Id="UpdExe" Guid="73F7EFEB-5462-45AB-B569-702A626DA480">
+            <File Id="PCUpdate.exe" Name="PCUpdate.exe"
+                  Source="$(var.StageDir)/PCUpdate.exe" KeyPath="yes" />
+          </Component>
+
+          <Component Id="Docs" Guid="B154A28A-73F6-4E3E-94D8-75C41F8C9409">
+            <File Id="README.txt" Name="README.txt"
+                  Source="$(var.StageDir)/README.txt" KeyPath="yes" />
+            <File Id="RELEASENOTES.txt" Name="RELEASE-NOTES.txt"
+                  Source="$(var.StageDir)/RELEASE-NOTES.txt" />
+            <File Id="LICENSEMIT.txt" Name="LICENSE-MIT.txt"
+                  Source="$(var.StageDir)/LICENSE-MIT.txt" />
+            <File Id="LICENSEAPACHE.txt" Name="LICENSE-APACHE.txt"
+                  Source="$(var.StageDir)/LICENSE-APACHE.txt" />
+<?if $(var.HaveNotice) = 1 ?>
+            <File Id="NOTICE.txt" Name="NOTICE.txt"
+                  Source="$(var.StageDir)/NOTICE.txt" />
+<?endif?>
+          </Component>
+
+          <!-- Machine-wide facts the updater and Setup.exe read. -->
+          <Component Id="RegApp" Guid="DA03B6FE-BE49-459A-A664-53D070226A32">
+            <RegistryValue Root="HKLM" Key="Software\PhotoCraft Classic" Name="InstallDir" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
+            <RegistryValue Root="HKLM" Key="Software\PhotoCraft Classic" Name="Version" Type="string" Value="$(var.Version)" />
+            <RegistryValue Root="HKLM" Key="Software\PhotoCraft Classic" Name="DesktopShortcut" Type="string" Value="[DESKTOPSHORTCUT]" />
+          </Component>
+
+          <!-- "Open with" registration only: a ProgID plus OpenWithProgids /
+               OpenWithList / Applications entries.  The default handler of
+               each extension (HKCR\.ext default value) is never changed. -->
+          <Component Id="Assoc" Guid="06DDFA0F-0D19-4DD0-AF2E-ECF95DDFAC25">
+            <RegistryValue Root="HKCR" Key="PhotoCraftClassic.Image" Type="string" Value="PhotoCraft Classic Image" KeyPath="yes" />
+            <RegistryValue Root="HKCR" Key="PhotoCraftClassic.Image\DefaultIcon" Type="string" Value="&quot;[INSTALLDIR]PhotoCraftClassic.exe&quot;,1" />
+            <RegistryValue Root="HKCR" Key="PhotoCraftClassic.Image\shell" Type="string" Value="open" />
+            <RegistryValue Root="HKCR" Key="PhotoCraftClassic.Image\shell\open" Type="string" Value="&amp;Open with PhotoCraft Classic" />
+            <RegistryValue Root="HKCR" Key="PhotoCraftClassic.Image\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]PhotoCraftClassic.exe&quot; &quot;%1&quot;" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe" Name="FriendlyAppName" Type="string" Value="PhotoCraft Classic" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]PhotoCraftClassic.exe&quot; &quot;%1&quot;" />
+            <RegistryValue Root="HKCR" Key=".psd\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".bmp\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".gif\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".jpg\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".jpeg\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".png\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".tif\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".tiff\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".tga\OpenWithProgids" Name="PhotoCraftClassic.Image" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".psd\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".bmp\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".gif\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".jpg\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".jpeg\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".png\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".tif\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".tiff\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key=".tga\OpenWithList\PhotoCraftClassic.exe" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".psd" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".bmp" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".gif" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".jpg" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".jpeg" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".png" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".tif" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".tiff" Type="string" Value="" />
+            <RegistryValue Root="HKCR" Key="Applications\PhotoCraftClassic.exe\SupportedTypes" Name=".tga" Type="string" Value="" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuDir" Name="PhotoCraft Classic">
+          <!-- Non-advertised shortcuts: Windows 95 without the IE4 desktop
+               update cannot run advertised (Darwin) shortcuts. -->
+          <Component Id="StartMenu" Guid="8CB1F3C2-FA5D-4E75-9781-91956996D23F">
+            <Shortcut Id="AppShortcut" Name="PhotoCraft Classic"
+                      Description="Edit images" Target="[INSTALLDIR]PhotoCraftClassic.exe" WorkingDirectory="INSTALLDIR" />
+            <Shortcut Id="UpdateShortcut" Name="Check for Updates"
+                      Description="Check for a new version of PhotoCraft Classic" Target="[INSTALLDIR]PCUpdate.exe"
+                      Arguments="--check" WorkingDirectory="INSTALLDIR" />
+            <Shortcut Id="NotesShortcut" Name="Release Notes"
+                      Description="What is new in this version" Target="[INSTALLDIR]RELEASE-NOTES.txt" WorkingDirectory="INSTALLDIR" />
+            <RemoveFolder Id="RemoveAppMenuDir" On="uninstall" />
+            <RegistryValue Root="HKLM" Key="Software\PhotoCraft Classic\Installer" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <Directory Id="DesktopFolder">
+        <Component Id="Desktop" Guid="32682823-FAF3-45FC-BA3C-984A965DC810">
+          <Shortcut Id="DesktopShortcut" Name="PhotoCraft Classic"
+                    Description="Edit images" Target="[INSTALLDIR]PhotoCraftClassic.exe" WorkingDirectory="INSTALLDIR" />
+          <RegistryValue Root="HKLM" Key="Software\PhotoCraft Classic\Installer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="PhotoCraft Classic" Level="1" Absent="disallow">
+      <ComponentRef Id="AppExe" />
+      <ComponentRef Id="UpdExe" />
+      <ComponentRef Id="Docs" />
+      <ComponentRef Id="RegApp" />
+      <ComponentRef Id="Assoc" />
+      <ComponentRef Id="StartMenu" />
+      <ComponentRef Id="Desktop" />
+    </Feature>
+  </Product>
+</Wix>

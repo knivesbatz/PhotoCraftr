@@ -1,8 +1,11 @@
 # Compatibility
 
-> **Status:** skeleton. Nothing has been verified on real Windows yet. Every row says
-> **Untested** until a run following the procedure below records evidence here: date, build,
-> machine or VM, and the tester.
+> **Status (0.1.0, 2026-10-30):** no row is **Verified** yet. Nothing has been run on a real
+> Windows 95-10 machine or VM. Every row is **Expected**: the static checks below pass for all three
+> executables, and the program was smoke-tested under Wine 9 (32-bit) with Wine set to report
+> Windows 95, Windows 98 and Windows 10. Wine is not Windows, so it cannot prove compatibility.
+> A row becomes **Verified** only after the real-OS procedure below has been run, with the date,
+> build, machine or VM and tester recorded here.
 
 ## Matrix
 
@@ -15,20 +18,20 @@ Status values:
 
 | Windows version | Arch | Status | Method | Notes |
 |---|---|---|---|---|
-| Windows 95 (retail / RTM, 4.00.950) | x86 | Untested | — | Needs Winsock with TCP/IP installed for the updater. Windows Installer 2.0 via InstMsiA.exe. No `TrackMouseEvent` (use `_TrackMouseEvent` or our own capture logic). No mouse-wheel message (IntelliPoint `MSWHEEL_ROLLMSG` only). |
-| Windows 95 OSR2 / OSR2.1 / OSR2.5 (4.00.950B/C) | x86 | Untested | — | As retail 95. FAT32 on OSR2. |
-| Windows 98 (4.10.1998) | x86 | Untested | — | Windows Installer 2.0 via InstMsiA.exe. Gradient captions available. |
-| Windows 98 SE (4.10.2222) | x86 | Untested | — | As 98. |
-| Windows ME (4.90.3000) | x86 | Untested | — | Ships Windows Installer 1.2; upgrade to 2.0 via InstMsiA.exe. |
-| Windows NT 4.0 SP6 / SP6a | x86 | Untested | — | Windows Installer 2.0 via InstMsiW.exe (needs SP6). No gradient captions (`SPI_GETGRADIENTCAPTIONS` unsupported). |
-| Windows 2000 (SP4) | x86 | Untested | — | Windows Installer 2.0 is built in (SP3+ has 2.0; 3.1 is available). |
-| Windows XP (SP2/SP3) | x86 | Untested | — | Windows Installer 3.1 built in (SP2+). Test with Luna themes on and with the classic theme. |
-| Windows XP Professional x64 | x64 (WOW64) | Untested | — | 32-bit binary under WOW64. |
-| Windows Vista (SP2) | x86 / x64 | Untested | — | UAC: install per-machine with elevation. The updater must not write to Program Files without elevation. Check VirtualStore redirection. |
-| Windows 7 (SP1) | x86 / x64 | Untested | — | DWM composition; our custom-drawn frame must stay correct with Aero on and off. |
-| Windows 8 | x86 / x64 | Untested | — | |
-| Windows 8.1 | x86 / x64 | Untested | — | Per-monitor DPI: the app is DPI-unaware, so the system bitmap-stretches it. Acceptable. |
-| Windows 10 (22H2) | x86 / x64 | Untested | — | TLS to the update server must work (BearSSL, not Schannel). Check SmartScreen on unsigned builds. |
+| Windows 95 (retail / RTM, 4.00.950) | x86 | Expected | Static checks; Wine smoke test | Needs Winsock with TCP/IP installed for the updater. Windows Installer 2.0 via InstMsiA.exe. No `TrackMouseEvent` (use `_TrackMouseEvent` or our own capture logic). No mouse-wheel message; the app handles `WM_MOUSEWHEEL` where the OS sends it and otherwise works without a wheel. |
+| Windows 95 OSR2 / OSR2.1 / OSR2.5 (4.00.950B/C) | x86 | Expected | Static checks; Wine smoke test | As retail 95. FAT32 on OSR2. |
+| Windows 98 (4.10.1998) | x86 | Expected | Static checks; Wine smoke test | Windows Installer 2.0 via InstMsiA.exe. Gradient captions available. |
+| Windows 98 SE (4.10.2222) | x86 | Expected | Static checks; Wine smoke test | As 98. |
+| Windows ME (4.90.3000) | x86 | Expected | Static checks; Wine smoke test | Ships Windows Installer 1.2; upgrade to 2.0 via InstMsiA.exe. |
+| Windows NT 4.0 SP6 / SP6a | x86 | Expected | Static checks; Wine smoke test | Windows Installer 2.0 via InstMsiW.exe (needs SP6). No gradient captions (`SPI_GETGRADIENTCAPTIONS` unsupported). |
+| Windows 2000 (SP4) | x86 | Expected | Static checks; Wine smoke test | Windows Installer 2.0 is built in (SP3+ has 2.0; 3.1 is available). |
+| Windows XP (SP2/SP3) | x86 | Expected | Static checks; Wine smoke test | Windows Installer 3.1 built in (SP2+). Test with Luna themes on and with the classic theme. |
+| Windows XP Professional x64 | x64 (WOW64) | Expected | Static checks; Wine smoke test | 32-bit binary under WOW64. |
+| Windows Vista (SP2) | x86 / x64 | Expected | Static checks; Wine smoke test | UAC: install per-machine with elevation. The updater must not write to Program Files without elevation. Check VirtualStore redirection. |
+| Windows 7 (SP1) | x86 / x64 | Expected | Static checks; Wine smoke test | DWM composition; our custom-drawn frame must stay correct with Aero on and off. |
+| Windows 8 | x86 / x64 | Expected | Static checks; Wine smoke test | |
+| Windows 8.1 | x86 / x64 | Expected | Static checks; Wine smoke test | The app calls `SetProcessDPIAware` (looked up at run time) so pixel art stays sharp; at high DPI the interface is small. |
+| Windows 10 (22H2) | x86 / x64 | Expected | Static checks; Wine smoke test | TLS to the update server must work (BearSSL, not Schannel). Check SmartScreen on unsigned builds. |
 
 Windows 11 is not in scope for this matrix, but it is expected to behave like Windows 10 x64.
 
@@ -36,8 +39,8 @@ Windows 11 is not in scope for this matrix, but it is expected to behave like Wi
 
 | Prerequisite | Applies to | Details |
 |---|---|---|
-| **Winsock with TCP/IP installed** | Windows 95 (all releases) | The updater (`PCUpdate.exe`) links `wsock32.dll` (Winsock 1.1). Windows 95 has Winsock 1.1 only if the TCP/IP protocol is installed (Control Panel > Network > Add > Protocol > Microsoft > TCP/IP). Without it the main program still runs; the updater reports "network not available". Winsock 2 is **not** required. |
-| **Windows Installer 2.0 redistributable** | 95, 98, 98 SE, ME: `InstMsiA.exe`. NT 4.0 SP6: `InstMsiW.exe`. | The MSI is authored for Windows Installer 2.0 (schema 200). `Setup.exe` detects the `msi.dll` version (`DllGetVersion` or the file version via `version.dll`) and, if it is below 2.0, runs the bundled InstMsiA/InstMsiW, then a reboot if requested, then the MSI. Windows 2000+ already has 2.0 or later. |
+| **Winsock with TCP/IP installed** | Windows 95 (all releases) | The updater (`PCUpdate.exe`) loads `wsock32.dll` (Winsock 1.1) at run time, so it starts without it and "Install update from file" still works; only online checks need it. Windows 95 has Winsock 1.1 only if the TCP/IP protocol is installed (Control Panel > Network > Add > Protocol > Microsoft > TCP/IP). Without it the main program still runs; the updater reports "network not available". Winsock 2 is **not** required. |
+| **Windows Installer 1.1 or later** | 95, 98, 98 SE: `InstMsiA.exe`. NT 4.0 SP6: `InstMsiW.exe`. ME and 2000+ already qualify. | The MSI is authored for Windows Installer 1.1 (summary page count 110; no post-1.1 tables, checked by `installer/build-msi.sh`). `Setup.exe` reads the `msi.dll` file version via `version.dll` and, below 1.1, runs `InstMsiA.exe` (9x) or `InstMsiW.exe` (NT 4) from its own folder, handles the reboot request, then runs the MSI. The redistributables are Microsoft's and are not bundled in this repository (see docs/release.md). |
 | **Correct system clock** | All (updater) | HTTPS certificate validation (BearSSL X.509) fails if the date is wrong. Many retro installs boot with a 1998/2000 clock. The updater shows "Check the date and time in Control Panel" when certificates are "not yet valid" or "expired". |
 | **Display** | All | 640×480 minimum, 800×600 recommended. **256 colors or more recommended**; 16-color (VGA) mode is supported, with images dithered (the UI uses only the 16 VGA colors). |
 | **CPU / FPU** | All | i486 or later with an x87 FPU. 486SX needs the 487 coprocessor; the build uses x87 instructions and no SSE or MMX. |
@@ -53,7 +56,9 @@ Windows 11 is not in scope for this matrix, but it is expected to behave like Wi
      `PCUpdate.exe`, `Setup.exe`) and fails if any imported DLL or function is not in
      `tools/win95-api-allowlist.txt`.
    - The allowlist contains only functions exported by retail Windows 95 `KERNEL32`, `USER32`,
-     `GDI32`, `ADVAPI32`, `WSOCK32` and `VERSION`, ANSI (`…A`) variants only.
+     `GDI32`, `ADVAPI32`, `SHELL32` (`DragQueryFileA`/`DragFinish`), `WSOCK32` and `VERSION`,
+     ANSI (`…A`) variants only. It was curated from Win95-era SDK documentation; it has not been
+     machine-checked against a real Windows 95 `KERNEL32.DLL` export table.
    - Any newer API must be loaded dynamically with `GetProcAddress` and guarded.
 2. **PE header check.** The Optional Header must have `MajorSubsystemVersion.Minor = 4.0` and
    `MajorOperatingSystemVersion = 4.0`, set by the Makefile with `--subsystem windows:4.0` and the
@@ -139,3 +144,16 @@ OS images.
 9. **Record** the date, build version, emulator/VM and its configuration (CPU, RAM, video, color
    depth), the OS build, the result and any notes in the matrix above. Set the status to
    **Verified** only when steps 2–8 pass.
+
+
+## Results recorded so far
+
+| Date | Build | Environment | What was exercised | Result |
+|---|---|---|---|---|
+| 2026-10-30 | 0.1.0 (this branch) | Ubuntu 24.04 + Wine 9.0 (32-bit), Xvfb 1024x768x24, Wine version "Windows 10" | Launch; open PNG and PSD; menus and submenus; Gaussian Blur with preview; Paintbrush strokes; New Layer; Type tool; Free Transform; Levels, Curves, Hue/Saturation, Color Balance, Image Size, New, Preferences, Color Picker dialogs; layered Save As PSD and reopen; marquee selection; "1998 Palettes" workspace | Pass (bugs found during the run were fixed: a Save that could write PSD data into a .png name, dialog group boxes, live stroke redraw) |
+| 2026-10-30 | 0.1.0 | Wine 9.0, Xvfb 800x600x16, Wine version "Windows 98" | Launch with a PSD at 800x600 16-bit colour | Pass: Tools panel switches to two columns, Navigator starts collapsed, image fits at 66.7% |
+| 2026-10-30 | 0.1.0 | Wine 9.0, Wine version "Windows 95" | Launch; File > New | Pass |
+| 2026-10-30 | 0.1.0 | Wine 9.0 | MSI install, upgrade 0.1.0 -> 0.1.1, downgrade refusal, uninstall; Setup.exe wizard and `/S`; updater check, download, signature/hash/replay failures, apply and relaunch (see docs/updater.md) | Pass, except that Wine's msiexec did not roll back a deliberately failed upgrade. Real Windows Installer should; unverified. |
+
+Wine reports a version but implements the modern API set, so these runs cannot catch a Windows 95
+API that is missing; the import audit is what guards that.
