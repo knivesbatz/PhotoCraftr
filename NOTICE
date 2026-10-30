@@ -1,0 +1,45 @@
+PhotoCraft Classic
+Copyright (c) 2026 the PhotoCraft Classic contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE).
+
+PhotoCraft Classic is derived in part from PhotoCraft
+(https://github.com/storytold/photocraft), Copyright (c) 2026 ArtCraft Team and the
+PhotoCraft contributors, licensed MIT OR Apache-2.0. Algorithms and file-format logic were
+reimplemented in C from that project. Each such source file names the upstream file it is
+derived from and states that it was modified. The upstream NOTICE notices for material that
+PhotoCraft Classic does not include (fonts, icons, word lists, model weights) are omitted, as
+Apache-2.0 section 4(d) permits.
+
+PhotoCraft Classic is an independent project. It is not affiliated with, endorsed by, or
+sponsored by the ArtCraft Team or Adobe Inc. "Adobe" and "Photoshop" are trademarks of Adobe
+Inc. PhotoCraft Classic contains no Adobe code, artwork, icons, or logos. The ArtCraft name,
+wordmark, and logos are trademarks of the ArtCraft Team and are not used here.
+
+Third-party components
+
+This product bundles the following third-party software, each under its own license. The
+per-file list (path, author, source, license) is in ATTRIBUTION.md.
+
+stb_image.h v2.30 and stb_image_write.h v1.16 (third_party/stb/)
+  Copyright (c) 2017 Sean Barrett.
+  Dual licensed: MIT License, or public domain (Unlicense), at your option.
+  See third_party/stb/LICENSE.
+
+BearSSL (third_party/bearssl/)
+  Copyright (c) 2016 Thomas Pornin <pornin@bolet.org>
+  MIT License. See third_party/bearssl/LICENSE.txt.
+
+Monocypher, including optional/monocypher-ed25519 (third_party/monocypher/)
+  Copyright (c) 2017-2023, Loup Vaillant
+  Copyright (c) 2017-2019, Michael Savage
+  Copyright (c) 2017-2023, Fabio Scotoni
+  Dual licensed: 2-clause BSD License, or CC0 1.0 Universal, at your option.
+  Parts of X25519/EdDSA are from SUPERCOP ref10 by Daniel J. Bernstein et al. (public domain).
+  See third_party/monocypher/LICENCE.md.
+
+The 2-clause BSD license of Monocypher requires that binary distributions reproduce its
+copyright notice, conditions, and disclaimer. Distributions of PhotoCraft Classic therefore
+install this NOTICE file together with the license files listed above (LICENSE-MIT,
+LICENSE-APACHE, third_party/stb/LICENSE, third_party/bearssl/LICENSE.txt,
+third_party/monocypher/LICENCE.md).

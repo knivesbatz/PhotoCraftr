@@ -1,0 +1,111 @@
+# PhotoCraft Classic CI: build, test, import audit, MSI, dist artifact.
+# Pushing a tag v<VERSION> additionally signs the update manifest and
+# publishes a GitHub Release (see docs/release.md).
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 wixl msitools python3
+          i686-w64-mingw32-gcc --version | head -1
+          wixl --version
+
+      - name: Unit tests (native, ASan/UBSan)
+        run: make test
+
+      - name: Build Windows binaries + Windows 95 import audit
+        run: make check
+
+      - name: Windows Installer package
+        run: make msi
+
+      - name: Assemble dist (unsigned manifest)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: make dist
+
+      - name: Upload dist
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoCraftClassic-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 wixl msitools python3
+
+      - name: Check that the tag matches VERSION
+        run: |
+          v=$(cat VERSION)
+          if [ "${GITHUB_REF_NAME}" != "v$v" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match VERSION ($v)"
+            exit 1
+          fi
+
+      - name: Build and sign release
+        env:
+          PC_UPDATE_SIGNING_KEY: ${{ secrets.PC_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$PC_UPDATE_SIGNING_KEY" ]; then
+            echo "::error::secret PC_UPDATE_SIGNING_KEY is not set (docs/release.md)"
+            exit 1
+          fi
+          if grep -q "PC_UPDATE_PUBKEY_IS_TEST_KEY 1" src/updater/pubkey.h; then
+            echo "::error::src/updater/pubkey.h still contains the TEST key"
+            exit 1
+          fi
+          make test
+          make dist
+          test -f dist/update-manifest.txt
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoCraftClassic-${{ github.ref_name }}
+          path: dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Asset names are part of the update protocol: PCUpdate.exe reads
+          # .../releases/latest/download/update-manifest.txt and the manifest
+          # points at .../releases/download/<tag>/PhotoCraftClassic-Setup.msi.
+          gh release create "$GITHUB_REF_NAME" \
+            --title "PhotoCraft Classic ${GITHUB_REF_NAME#v}" \
+            --notes-file dist/RELEASE-NOTES.txt \
+            dist/PhotoCraftClassic-Setup.msi \
+            dist/Setup.exe \
+            dist/PhotoCraftClassic.exe \
+            dist/PCUpdate.exe \
+            dist/RELEASE-NOTES.txt \
+            dist/SHA256SUMS.txt \
+            dist/update-manifest.txt
