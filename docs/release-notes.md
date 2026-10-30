@@ -28,6 +28,13 @@ What's in it
 - Filters: Blur, Sharpen, Noise, Stylize, Pixelate, Distort, Render and
   Other families (31 filters), with previews.
 - Files: layered Photoshop PSD, BMP, GIF, JPEG, PNG, TIFF and Targa.
+- 1998 output rules: BMP, Targa, GIF, PNG, TIFF and JPEG save only at the
+  colour depths a 1998 game studio could produce (8-bit palette, 16-bit
+  high colour, 24-bit, and 32-bit for Targa/PNG). Each format has a
+  consistent Options dialog with a 100% before/after preview, Photoshop
+  5-style palettes and dithers, and a magenta colour key for sprites.
+  PNG is the one modern exception (full alpha, PNG-8 with partial alpha).
+  New Image > Mode > Indexed Color.
 - Built-in updater (Help > Check for Updates) with signed manifests and a
   bundled TLS stack; Windows Installer package and setup program.
 

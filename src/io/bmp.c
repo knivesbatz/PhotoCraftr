@@ -6,9 +6,10 @@
  * Windows 3 (40-byte), OS/2 2.x and V2..V5 headers.  A 32-bit BI_RGB file
  * whose fourth bytes are not all zero is taken to carry alpha.
  *
- * Writes a plain BITMAPINFOHEADER (what Windows 95 understands): 24-bit,
- * 32-bit with alpha (bmp_depth 32), or an 8-bit gray palette for
- * Grayscale documents.
+ * Writes a plain BITMAPINFOHEADER (what Windows 95 understands) at the
+ * 1998 depths only: 8-bit palette (a gray ramp for Grayscale documents),
+ * 16-bit high colour (5-5-5 BI_RGB, or 5-6-5 BI_BITFIELDS with green6)
+ * and 24-bit.  No 32-bit output.
  */
 #include "io/ioint.h"
 
@@ -199,52 +200,69 @@ PcDoc *pc_bmp_load(const u8 *data, size_t n, char *err, size_t errn)
     }
     gray = bpp <= 8;
     for (i = 0; gray && i < npal; i++) if (pal[i][0] != pal[i][1] || pal[i][1] != pal[i][2]) gray = 0;
-    return pcio_doc_from_buf(buf, gray ? PC_MODE_GRAY : PC_MODE_RGB, dpi, PC_FMT_BMP, err, errn);
+    {
+        PcDoc *d = pcio_doc_from_buf(buf, gray ? PC_MODE_GRAY : PC_MODE_RGB, dpi, PC_FMT_BMP, err, errn);
+        if (d && bpp <= 8 && !gray) {
+            /* remember the colour table: saving 8-bit with the Document palette keeps it */
+            d->index_ncolors = npal;
+            d->index_transparent = -1;
+            for (i = 0; i < npal; i++) memcpy(d->index_pal + i * 3, pal[i], 3);
+        }
+        return d;
+    }
 }
 
 int pc_bmp_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, char *err, size_t errn)
 {
-    PcBuf *c;
-    int W = d->s.w, H = d->s.h, gray = d->s.mode == PC_MODE_GRAY, bpp, x, y;
-    size_t np = (size_t)W * H, stride, pal, imgsz;
+    PcFlat f;
+    int W = d->s.w, H = d->s.h, bpp, x, y, npal = 0, fields;
+    size_t stride, hdr, imgsz;
     u32 ppm;
     PcWr w;
     memset(&w, 0, sizeof w);
     *out = NULL; *outn = 0;
-    c = pcio_composite(d, err, errn);
-    if (!c) return -1;
-    bpp = gray ? 8 : ((o && o->bmp_depth == 32) ? 32 : 24);
-    if (bpp != 32) pcio_matte_white(c->px, np);
+    if (pcio_flat(d, PC_FMT_BMP, o, &f, err, errn)) return -1;
+    bpp = f.depth;
+    fields = bpp == 16 && o && o->green6;               /* 5-6-5 needs BI_BITFIELDS */
+    if (bpp == 8) npal = f.gray ? 256 : f.ix.ncolors;
     stride = (((size_t)W * bpp + 31) / 32) * 4;
-    pal = gray ? 1024 : 0;
+    hdr = 54 + (fields ? 12 : 0) + (size_t)npal * 4;
     imgsz = stride * H;
     ppm = pcio_uround(pcio_doc_dpi(d) / 0.0254);
-    if (wr_reserve(&w, 54 + pal + imgsz)) { pc_buf_unref(c); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
+    if (wr_reserve(&w, hdr + imgsz)) { pcio_flat_free(&f); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
     wr_bytes(&w, "BM", 2);
-    wr_u32le(&w, (u32)(54 + pal + imgsz));
+    wr_u32le(&w, (u32)(hdr + imgsz));
     wr_u32le(&w, 0);
-    wr_u32le(&w, (u32)(54 + pal));
+    wr_u32le(&w, (u32)hdr);
     wr_u32le(&w, 40);
     wr_u32le(&w, (u32)W);
     wr_u32le(&w, (u32)H);              /* positive: bottom-up */
     wr_u16le(&w, 1);
     wr_u16le(&w, (unsigned)bpp);
-    wr_u32le(&w, 0);                   /* BI_RGB */
+    wr_u32le(&w, fields ? 3 : 0);      /* BI_BITFIELDS / BI_RGB */
     wr_u32le(&w, (u32)imgsz);
     wr_u32le(&w, ppm);
     wr_u32le(&w, ppm);
-    wr_u32le(&w, gray ? 256 : 0);
+    wr_u32le(&w, (u32)npal);
     wr_u32le(&w, 0);
-    if (gray) for (x = 0; x < 256; x++) { wr_u8(&w, (unsigned)x); wr_u8(&w, (unsigned)x); wr_u8(&w, (unsigned)x); wr_u8(&w, 0); }
+    if (fields) { wr_u32le(&w, 0xF800); wr_u32le(&w, 0x07E0); wr_u32le(&w, 0x001F); }
+    for (x = 0; x < npal; x++) {
+        if (f.gray) { wr_u8(&w, (unsigned)x); wr_u8(&w, (unsigned)x); wr_u8(&w, (unsigned)x); }
+        else { wr_u8(&w, f.ix.pal[x * 3 + 2]); wr_u8(&w, f.ix.pal[x * 3 + 1]); wr_u8(&w, f.ix.pal[x * 3]); }
+        wr_u8(&w, 0);
+    }
     for (y = H - 1; y >= 0; y--) {
-        const u8 *s = c->px + (size_t)y * W * 4;
+        const u8 *s = f.c->px + (size_t)y * W * 4;
         size_t start = w.n;
         for (x = 0; x < W; x++, s += 4) {
-            if (bpp == 8) wr_u8(&w, s[0]);
-            else { wr_u8(&w, s[2]); wr_u8(&w, s[1]); wr_u8(&w, s[0]); if (bpp == 32) wr_u8(&w, s[3]); }
+            switch (bpp) {
+            case 8: wr_u8(&w, f.gray ? s[0] : f.ix.idx[(size_t)y * W + x]); break;
+            case 16: wr_u16le(&w, pc_hicolor_pack(s[0], s[1], s[2], fields)); break;
+            default: wr_u8(&w, s[2]); wr_u8(&w, s[1]); wr_u8(&w, s[0]);
+            }
         }
         wr_fill(&w, 0, stride - (w.n - start));
     }
-    pc_buf_unref(c);
+    pcio_flat_free(&f);
     return wr_finish(&w, out, outn, err, errn);
 }

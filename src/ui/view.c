@@ -58,7 +58,7 @@ void view_title(DocView *v, char *out, int n)
     else pc_snprintf(zs, sizeof zs, "%.2f", z);
     if (zs[strlen(zs) - 1] == '0' && strchr(zs, '.')) { zs[strlen(zs) - 1] = 0; if (zs[strlen(zs) - 1] == '.') zs[strlen(zs) - 1] = 0; }
     pc_snprintf(out, (size_t)n, "%s @ %s%% (%s, %s/8)%s", v->doc->title, zs, l ? l->name : "",
-                v->doc->s.mode == PC_MODE_GRAY ? "Gray" : "RGB", v->doc->dirty ? " *" : "");
+                v->doc->s.mode == PC_MODE_GRAY ? "Gray" : v->doc->index_ncolors ? "Indexed" : "RGB", v->doc->dirty ? " *" : "");
 }
 
 /* ---------------- geometry ---------------- */

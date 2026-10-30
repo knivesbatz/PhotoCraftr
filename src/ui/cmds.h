@@ -220,7 +220,9 @@
     X(CMD_LAYER_STYLE_GLOW, "&Outer Glow...", "", 0, 0) \
     X(CMD_LAYER_STYLE_BEVEL, "&Bevel and Emboss...", "", 0, 0) \
     X(CMD_COMMIT, "Commit", "Enter", 0, 0) \
-    X(CMD_CANCEL, "Cancel", "Esc", 0, 0)
+    X(CMD_CANCEL, "Cancel", "Esc", 0, 0) \
+    /* appended (not next to Grayscale/RGB) so recorded Actions keep their command ids */ \
+    X(CMD_MODE_INDEXED, "&Indexed Color...", "", 0, 0)
 
 #define X(id, label, sc, vk, mods) id,
 enum { PC_COMMANDS(X) CMD_COUNT };

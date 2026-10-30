@@ -76,6 +76,84 @@ void reg_set_bin(const char *sub, const char *name, const void *v, int n)
     RegCloseKey(k);
 }
 
+/* ---------------- save options per format (the 1998 output rule) ---------------- */
+
+/* Bump when PcSaveOpts / PcQuantOpts change layout so stale blobs are ignored. */
+#define SAVEOPTS_VERSION 1
+
+int save_opts_kind(const PcDoc *d)
+{
+    if (d->s.mode == PC_MODE_GRAY) return 2;
+    return pc_doc_has_transparency(d) ? 1 : 0;
+}
+
+static void sanitize_quant(PcQuantOpts *q)
+{
+    q->palette = PC_CLAMP(q->palette, 0, PC_PAL_COUNT - 1);
+    q->colors = PC_CLAMP(q->colors, 2, 256);
+    q->dither = PC_CLAMP(q->dither, 0, PC_DITHER_COUNT - 1);
+    q->transparency = q->transparency != 0;
+    q->colorkey = q->colorkey != 0;
+    q->full_alpha = q->full_alpha != 0;
+    q->key_rgb &= 0xFFFFFF;
+}
+
+static void save_opts_name(char *out, size_t n, int fmt, int kind)
+{
+    static const char *const kinds[3] = { "", " Transparent", " Gray" };
+    pc_snprintf(out, n, "Save %s%s", pc_format_ext(fmt), kinds[PC_CLAMP(kind, 0, 2)]);
+}
+
+void settings_load_save_opts(int fmt, int kind, PcSaveOpts *o)
+{
+    char name[48];
+    PcSaveOpts tmp;
+    pc_save_opts_default(o);
+    o->jpeg_quality = g_app.prefs.jpeg_quality;
+    /* Defaults (the dialog proposes these the first time): BMP/TIFF 24-bit,
+     * Targa 24 (32 with transparency), PNG 24 (32 and full alpha with
+     * transparency), GIF Adaptive 256 with Diffusion, gray documents 8-bit. */
+    o->depth = pc_format_default_depth(fmt, kind == 2, kind == 1);
+    if (fmt == PC_FMT_PNG && kind == 1) o->q.full_alpha = 1;
+    if (fmt == PC_FMT_PSD) o->depth = 0;
+    save_opts_name(name, sizeof name, fmt, kind);
+    if (reg_get_int("Settings", "SaveOptsVersion", 0) != SAVEOPTS_VERSION) return;
+    if (!reg_get_bin("Settings", name, &tmp, sizeof tmp)) return;
+    if (!pc_format_depth_ok(fmt, tmp.depth)) return;
+    sanitize_quant(&tmp.q);
+    tmp.green6 = tmp.green6 != 0;
+    tmp.interlace = tmp.interlace != 0;
+    tmp.tiff_compress = PC_CLAMP(tmp.tiff_compress, 0, 2);
+    tmp.tga_rle = tmp.tga_rle != 0;
+    tmp.jpeg_quality = PC_CLAMP(tmp.jpeg_quality, 0, 12);
+    *o = tmp;
+}
+
+void settings_store_save_opts(int fmt, int kind, const PcSaveOpts *o)
+{
+    char name[48];
+    save_opts_name(name, sizeof name, fmt, kind);
+    reg_set_int("Settings", "SaveOptsVersion", SAVEOPTS_VERSION);
+    reg_set_bin("Settings", name, o, sizeof *o);
+    if (fmt == PC_FMT_JPEG) g_app.prefs.jpeg_quality = o->jpeg_quality;
+}
+
+void settings_load_indexed(PcQuantOpts *q)
+{
+    PcQuantOpts tmp;
+    pc_quant_defaults(q);
+    if (reg_get_int("Settings", "SaveOptsVersion", 0) != SAVEOPTS_VERSION) return;
+    if (!reg_get_bin("Settings", "Indexed Color", &tmp, sizeof tmp)) return;
+    sanitize_quant(&tmp);
+    *q = tmp;
+}
+
+void settings_store_indexed(const PcQuantOpts *q)
+{
+    reg_set_int("Settings", "SaveOptsVersion", SAVEOPTS_VERSION);
+    reg_set_bin("Settings", "Indexed Color", q, sizeof *q);
+}
+
 /* Bump when ToolOpts changes layout so stale blobs are ignored. */
 #define TOOLOPTS_VERSION 3
 

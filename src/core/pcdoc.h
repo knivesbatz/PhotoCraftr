@@ -158,6 +158,11 @@ typedef struct PcDoc {
     int dirty;
     unsigned revision;                 /* bumps on every change (view caches key on it) */
     int history_source;                /* hist index used by the History Brush, -1 = initial */
+    /* Image > Mode > Indexed Color: the palette the image was reduced to
+     * (saving at 8 bits with the Document palette reuses it exactly). */
+    int index_ncolors;                 /* 0 = not indexed */
+    int index_transparent;             /* reserved entry, -1 = none */
+    u8 index_pal[768];
 } PcDoc;
 
 PcDoc *pc_doc_new(int w, int h, int mode, double dpi, int fill, u32 rgb);
