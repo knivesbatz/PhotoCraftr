@@ -53,7 +53,9 @@ the Windows 95 API, so it targets Windows 95, 98, ME, NT 4.0, 2000, XP, Vista,
   Distort, Render and Other families.
 - **Image and transform:** Image Size, Canvas Size, Rotate Canvas, Crop, Trim,
   Free Transform (scale, rotate, skew, distort) and Numeric Transform.
-- **Files:** layered Photoshop PSD, BMP, GIF, JPEG, PNG, TIFF and Targa.
+- **Files:** layered Photoshop PSD, BMP, GIF, JPEG, PNG, TIFF and Targa,
+  exported only at 1998 colour depths (see below). Image > Mode > Indexed
+  Color reduces an image to a Photoshop 5-style palette.
 - **Workspace:**
   - Panels dock in the CS6 arrangement; tabs drag between groups, groups
     tear off into floating palettes, and groups collapse or hide.
@@ -69,6 +71,45 @@ the Windows 95 API, so it targets Windows 95, 98, ME, NT 4.0, 2000, XP, Vista,
 - **Distribution:** a Windows Installer package targeting Windows Installer 1.1,
   plus a Setup.exe that installs the Windows Installer runtime on Windows 95/98
   and NT 4.0 when it is missing.
+
+## 1998 output rules
+
+PhotoCraft Classic exports only what a game studio could produce in 1998.
+This is a hard rule: the writers refuse any other depth, whether the request
+comes from a dialog, an Action or code.
+
+| Format | Colour depths (bits per pixel) | Notes |
+|---|---|---|
+| BMP | 8 (palette), 16 (5-5-5, or 5-6-5 with BI_BITFIELDS), 24 | No 32-bit BMP |
+| Targa | 8 (colour-mapped), 16 (A1R5G5B5), 24, 32 (8-bit alpha) | RLE optional |
+| GIF | 8 | GIF89a, transparency, interlace |
+| PNG | 8 (PLTE + tRNS), 24, 32 | Never 16 bits per channel |
+| TIFF | 8 (palette colour), 24 | None, LZW or PackBits |
+| JPEG | 8 (grayscale), 24 | Baseline only, 4:2:0 chroma, 0-12 quality |
+| PSD | 8 bits per channel | Layered, as before |
+
+Grayscale documents save 8-bit gray.
+
+- **Palettes.** Every 8-bit export and Image > Mode > Indexed Color use one
+  quantizer. It offers Photoshop 5's palettes: Exact, System (Windows),
+  System (Mac OS), Web, Uniform, Adaptive (median cut, 2-256 colours) and
+  the document's own palette. It offers the dithers None, Pattern (Bayer)
+  and Diffusion (Floyd-Steinberg).
+- **High colour.** 16-bit output rounds to 5-5-5 or 5-6-5, with optional
+  dithering.
+- **Colour key.** "Transparent = color key" turns transparent pixels into a
+  solid key colour, magenta (255, 0, 255) by default, the way sprites were
+  keyed. The key's palette entry is reserved, so no opaque pixel lands on it.
+- **Options dialog.** Each format's Options dialog shows only that format's
+  depths. A 100% preview shows exactly what the file will contain. The last
+  choices are remembered per format.
+
+**The PNG exception.** PNG may carry modern transparency, by deliberate
+choice. PNG-32 keeps the full 8-bit alpha, and it is the default PNG depth
+for a document with transparency. PNG-8 can store a partial alpha value per
+palette entry ("Transparency: Full Alpha"; the quantizer then treats alpha
+as a fourth component). Gray documents can write 8-bit gray plus alpha.
+Every other format keeps the strict 1998 rules.
 
 ## Status and compatibility
 

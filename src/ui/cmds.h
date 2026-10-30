@@ -222,6 +222,7 @@
     X(CMD_COMMIT, "Commit", "Enter", 0, 0) \
     X(CMD_CANCEL, "Cancel", "Esc", 0, 0) \
     /* Added after the first release: appended so recorded actions keep their ids. */ \
+    X(CMD_MODE_INDEXED, "&Indexed Color...", "", 0, 0) \
     /* Layer > New Adjustment Layer (same order as PC_ADJ_*) */ \
     X(CMD_ADJ_BRIGHTNESS_CONTRAST, "&Brightness/Contrast...", "", 0, 0) \
     X(CMD_ADJ_LEVELS, "&Levels...", "", 0, 0) \

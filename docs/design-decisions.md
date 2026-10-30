@@ -25,3 +25,48 @@ The upstream audit is in [`photocraft-audit.md`](photocraft-audit.md).
 | D16 | **The upstream PhotoCraft (Rust) is used as a reference for algorithms, not as code.** Algorithms are reimplemented in C with attribution (MIT OR Apache-2.0 kept). | Upstream cannot run on our targets; see the audit. Its algorithms are well tested against Photoshop oracles. |
 | D17 | **A "Classic 5.0" workspace** [PCC] reproduces PS5's floating palette arrangement, in addition to Essentials. | A cheap nod to the period look. It is selectable from Window > Workspace. |
 | D18 | **One-column tools at 1024×768 and above; two columns automatically at 800×600** (the user can override). | One column needs about 527 px of height; 800×600 leaves 504 px. |
+| D19 | **Exports are limited to what a 1998 game studio could produce** (see "1998 output rules" below). There is one quantizer for Indexed Color and every 8-bit export, plus the magenta colour key. **PNG is the one deliberate modern exception:** full 8-bit alpha at 32 bits, and partial alpha per palette entry in PNG-8. | **The user chose this as a hard rule.** The writers enforce it, so dialogs, Actions and code paths cannot get around it. The user asked for the PNG transparency exception explicitly. |
+
+## 1998 output rules
+
+`pc_save_mem` checks every request against this table, and so does each codec on its own. Depth 0 means "the format's default".
+
+| Format | Bits per pixel | Details |
+|---|---|---|
+| BMP | 8, 16, 24 | 8: palette (a gray ramp for Grayscale documents). 16: 5-5-5 `BI_RGB`, or 5-6-5 `BI_BITFIELDS`; Windows 95 reads both. There is no 32-bit output. |
+| Targa | 8, 16, 24, 32 | 8: colour-mapped with a 24-bit map (type 3 gray for Grayscale documents). 16: A1R5G5B5. 32: 8-bit alpha. Rows are stored bottom-up. RLE is optional, and its packets never cross a scanline. |
+| GIF | 8 | GIF89a with a transparent index and interlacing. |
+| PNG | 8, 24, 32 | 8: PLTE plus tRNS, or 8-bit gray. 32: RGBA, or gray plus alpha. Never 16 bits per channel. |
+| TIFF | 8, 24 | 8: palette colour (ColorMap) or gray. Compression: none, LZW or PackBits. Transparency is matted or turned into the colour key. |
+| JPEG | 8, 24 | Sequential baseline only, never progressive. 24-bit is always YCbCr 4:2:0. Photoshop's 0-12 quality scale. |
+| PSD | 8 bits per channel | Layered, unchanged. |
+
+**Palettes (`src/core/quantize.c`).** These follow Photoshop 5's Indexed Color dialog:
+
+- **Exact:** up to 256 colours.
+- **System (Windows):** the 20 static colours at 0-9 and 246-255, with the 6×6×6 cube and a gray ramp between them.
+- **System (Mac OS):** white, the descending cube, the R/G/B/gray ramps, then black.
+- **Web:** the 216-colour cube.
+- **Uniform:** an r×g×b grid, so 256 colours give 6×7×6.
+- **Adaptive:** median cut on a 15-bit histogram, entries are the means of the real colours, and an image with few enough colours keeps them exactly.
+- **Document:** the palette Image > Mode > Indexed Color stored, reused index for index.
+
+**Dithers.** None, Pattern (8×8 Bayer) and Diffusion (Floyd-Steinberg). Colours that are already in the palette are never moved. 16-bit output rounds each channel to the nearest 5- or 6-bit level and expands it back the way our BMP reader does, with the same dithers. All of it is integer arithmetic, deterministic on x87 and on the host.
+
+**Colour key.** Pixels with alpha below 128 become `key_rgb`, magenta (255, 0, 255) by default. The key's entry is reserved:
+
+- A palette that already contains the key colour reuses that entry.
+- Otherwise the key is appended.
+- In a full 256-colour palette, the key replaces the most redundant entry.
+
+Opaque pixels never dither onto the key, so the key appears exactly where the image was transparent.
+
+**The PNG exception.** PNG-32 keeps every alpha value, and it is the default PNG depth when the document has transparency. With "Transparency: Full Alpha", PNG-8 quantizes in RGBA:
+
+- Median cut runs on a 4-4-4-4 histogram, and distances are measured in premultiplied space.
+- Fully transparent pixels share one entry.
+- Translucent entries are sorted first, which keeps tRNS short.
+
+Indexed Color mode stays binary (the 1998 kind).
+
+**Indexed Color mode.** Indexed Color is not a separate pixel format. The document keeps RGBA pixels, all of them palette colours, and remembers the palette (`PcDoc.index_*`, outside history). It flattens to one layer and records one history state. Image > Mode > RGB Color forgets the palette. The command was appended to the command table, not placed beside Grayscale and RGB, so the ids stored in saved Actions stay valid.

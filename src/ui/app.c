@@ -222,8 +222,6 @@ int app_save_view(DocView *v, int save_as)
     u8 *out = NULL;
     size_t n = 0;
     int layered = v->doc->s.nlayers > 1 || v->doc->s.layers[0]->kind == PC_LAYER_TEXT || !v->doc->s.layers[0]->is_background || v->doc->s.nchannels > 0;
-    pc_save_opts_default(&o);
-    o.jpeg_quality = g_app.prefs.jpeg_quality;
     pc_strlcpy(path, v->doc->path, sizeof path);
     if (fmt == PC_FMT_UNKNOWN) fmt = PC_FMT_PSD;
     /* Plain Save goes straight to disk only when the document's own file and
@@ -242,7 +240,21 @@ int app_save_view(DocView *v, int save_as)
             pc_strlcat(path, pc_format_ext(fmt), sizeof path);
         }
         if (!dlg_save_file(path, sizeof path, &fmt, layered)) return -1;
-        if (!dlg_format_options(fmt, &o)) return -1;
+    }
+    /* last options for this format and kind of document (1998 depths only) */
+    {
+        int kind = save_opts_kind(v->doc);
+        settings_load_save_opts(fmt, kind, &o);
+        if (o.q.palette == PC_PAL_DOCUMENT && !v->doc->index_ncolors) o.q.palette = PC_PAL_ADAPTIVE;
+        if (v->doc->index_ncolors && fmt != PC_FMT_JPEG && pc_format_depth_ok(fmt, 8)) {
+            /* an Indexed Color image saves with its own palette */
+            o.depth = fmt == PC_FMT_PSD ? 0 : 8;
+            o.q.palette = PC_PAL_DOCUMENT;
+        }
+        if (save_as) {
+            if (!dlg_format_options(v->doc, fmt, &o)) return -1;
+            settings_store_save_opts(fmt, kind, &o);
+        }
     }
     {
         HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));

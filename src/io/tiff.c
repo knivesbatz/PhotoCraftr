@@ -9,9 +9,10 @@
  * X/YResolution with ResolutionUnit.  JPEG, CCITT and YCbCr files are
  * refused with a message.
  *
- * Writing: Intel byte order, 8-bit gray or RGB, unassociated alpha when
- * the image is transparent and save_alpha is on, about 8 KB per strip,
- * compression none / LZW / PackBits (tiff_compress), resolution in dpi.
+ * Writing (the 1998 depths only): Intel byte order, 8-bit palette colour
+ * (ColorMap), 8-bit gray for Grayscale documents, or 24-bit RGB; about
+ * 8 KB per strip, compression none / LZW / PackBits (tiff_compress),
+ * resolution in dpi.  Transparency is matted (or becomes the colour key).
  */
 #include "io/ioint.h"
 
@@ -479,25 +480,24 @@ typedef struct { unsigned tag, type; u32 count, value; } OutEnt;
 
 int pc_tiff_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, char *err, size_t errn)
 {
-    PcBuf *c;
-    int W = d->s.w, H = d->s.h, gray = d->s.mode == PC_MODE_GRAY, alpha, spp, comp, x, y, i;
+    PcFlat f;
+    int W = d->s.w, H = d->s.h, gray, indexed, spp, comp, x, y, i;
     int cmode = o ? o->tiff_compress : 0;
-    size_t np = (size_t)W * H, rb, k;
+    size_t rb, k;
     u32 rps, nstrips, *offs = NULL, *cnts = NULL, *keys = NULL, xres;
     u16 *vals = NULL;
     u8 *row = NULL, *pk = NULL;
     OutEnt ents[20];
     int ne = 0, rc = -1;
-    size_t bps_at = 0, offs_at = 0, cnts_at = 0, res_at, sw_at, ifd_at;
+    size_t bps_at = 0, offs_at = 0, cnts_at = 0, res_at, sw_at, ifd_at, cmap_at = 0;
     static const char sw[] = "PhotoCraft Classic";
     PcWr w;
     memset(&w, 0, sizeof w);
     *out = NULL; *outn = 0;
-    c = pcio_composite(d, err, errn);
-    if (!c) return -1;
-    alpha = (!o || o->save_alpha) && pcio_has_alpha(c->px, np);
-    if (!alpha) pcio_matte_white(c->px, np);
-    spp = (gray ? 1 : 3) + alpha;
+    if (pcio_flat(d, PC_FMT_TIFF, o, &f, err, errn)) return -1;
+    gray = f.gray;
+    indexed = f.ix.idx != NULL;
+    spp = (gray || indexed) ? 1 : 3;
     comp = cmode == 1 ? 5 : cmode == 2 ? 32773 : 1;
     rb = (size_t)W * spp;
     rps = (u32)PC_MAX(1, 8192 / rb);
@@ -517,11 +517,11 @@ int pc_tiff_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
         u32 y0 = (u32)k * rps, rows = PC_MIN(rps, (u32)H - y0);
         u8 *q = row;
         for (y = (int)y0; y < (int)(y0 + rows); y++) {
-            const u8 *s = c->px + (size_t)y * W * 4;
+            const u8 *s = f.c->px + (size_t)y * W * 4;
             for (x = 0; x < W; x++, s += 4) {
-                if (gray) *q++ = s[0];
+                if (indexed) *q++ = f.ix.idx[(size_t)y * W + x];
+                else if (gray) *q++ = s[0];
                 else { *q++ = s[0]; *q++ = s[1]; *q++ = s[2]; }
-                if (alpha) *q++ = s[3];
             }
         }
         offs[k] = (u32)w.n;
@@ -548,6 +548,13 @@ int pc_tiff_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
     sw_at = w.n;
     wr_bytes(&w, sw, sizeof sw);
     if (w.n & 1) wr_u8(&w, 0);
+    if (indexed) {
+        /* ColorMap: all reds, then greens, then blues, 16 bits each, 256 entries */
+        int ch;
+        cmap_at = w.n;
+        for (ch = 0; ch < 3; ch++)
+            for (i = 0; i < 256; i++) wr_u16le(&w, i < f.ix.ncolors ? f.ix.pal[i * 3 + ch] * 257u : 0u);
+    }
 
 #define ADD(tg, ty, cn, v) do { ents[ne].tag = (tg); ents[ne].type = (ty); ents[ne].count = (cn); ents[ne].value = (v); ne++; } while (0)
     ADD(254, 4, 1, 0);
@@ -555,7 +562,7 @@ int pc_tiff_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
     ADD(T_HEIGHT, 4, 1, (u32)H);
     ADD(T_BPS, 3, (u32)spp, spp > 2 ? (u32)bps_at : (spp == 2 ? (8u | 8u << 16) : 8u));
     ADD(T_COMP, 3, 1, (u32)comp);
-    ADD(T_PHOTO, 3, 1, gray ? 1u : 2u);
+    ADD(T_PHOTO, 3, 1, indexed ? 3u : gray ? 1u : 2u);
     ADD(T_STRIPOFF, 4, nstrips, nstrips > 1 ? (u32)offs_at : offs[0]);
     ADD(T_SPP, 3, 1, (u32)spp);
     ADD(T_RPS, 4, 1, rps);
@@ -565,7 +572,7 @@ int pc_tiff_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
     ADD(T_PLANAR, 3, 1, 1);
     ADD(T_RESUNIT, 3, 1, 2);
     ADD(305, 2, (u32)sizeof sw, (u32)sw_at);
-    if (alpha) ADD(T_EXTRA, 3, 1, 2);           /* unassociated alpha */
+    if (indexed) ADD(T_CMAP, 3, 768, (u32)cmap_at);
 #undef ADD
     ifd_at = w.n;
     wr_u16le(&w, (unsigned)ne);
@@ -581,7 +588,7 @@ int pc_tiff_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
     rc = w.err ? -1 : 0;
 done:
     free(offs); free(cnts); free(row); free(pk); free(keys); free(vals);
-    pc_buf_unref(c);
+    pcio_flat_free(&f);
     if (rc) { wr_free(&w); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
     return wr_finish(&w, out, outn, err, errn);
 }

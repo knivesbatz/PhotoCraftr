@@ -6,15 +6,104 @@
 void pc_save_opts_default(PcSaveOpts *o)
 {
     memset(o, 0, sizeof *o);
-    o->jpeg_quality = 8;        /* "High" */
+    o->depth = 0;               /* the format's default for the document */
+    o->green6 = 0;
+    pc_quant_defaults(&o->q);   /* Adaptive 256, Diffusion, transparency, magenta key off */
+    o->interlace = 0;
     o->tiff_compress = 0;
-    o->gif_dither = 1;
-    o->gif_transparency = 1;
-    o->gif_interlace = 0;
-    o->png_interlace = 0;
-    o->bmp_depth = 24;
     o->tga_rle = 0;
-    o->save_alpha = 1;
+    o->jpeg_quality = 8;        /* "High" */
+}
+
+/* ---------------- the 1998 output rule (see pcio.h) ---------------- */
+
+int pc_format_depths(int fmt, int *dd)
+{
+    static const int bmp[] = { 8, 16, 24 }, tga[] = { 8, 16, 24, 32 }, gif[] = { 8 }, png[] = { 8, 24, 32 },
+                     tif[] = { 8, 24 }, jpg[] = { 8, 24 }, psd[] = { 8, 24, 32 };
+    const int *t;
+    int n, i;
+    switch (fmt) {
+    case PC_FMT_BMP: t = bmp; n = 3; break;
+    case PC_FMT_TGA: t = tga; n = 4; break;
+    case PC_FMT_GIF: t = gif; n = 1; break;
+    case PC_FMT_PNG: t = png; n = 3; break;
+    case PC_FMT_TIFF: t = tif; n = 2; break;
+    case PC_FMT_JPEG: t = jpg; n = 2; break;
+    case PC_FMT_PSD: t = psd; n = 3; break;
+    default: return 0;
+    }
+    for (i = 0; i < n; i++) dd[i] = t[i];
+    return n;
+}
+
+int pc_format_depth_ok(int fmt, int depth)
+{
+    int dd[4], n, i;
+    if (depth == 0) return fmt > PC_FMT_UNKNOWN && fmt < PC_FMT_COUNT;
+    n = pc_format_depths(fmt, dd);
+    for (i = 0; i < n; i++) if (dd[i] == depth) return 1;
+    return 0;
+}
+
+int pc_format_default_depth(int fmt, int gray, int transparent)
+{
+    switch (fmt) {
+    case PC_FMT_GIF: return 8;
+    case PC_FMT_TGA: case PC_FMT_PNG: return transparent ? 32 : gray ? 8 : 24;
+    case PC_FMT_PSD: return gray ? 8 : transparent ? 32 : 24;
+    default: return gray ? 8 : 24;
+    }
+}
+
+int pc_doc_has_transparency(const PcDoc *d)
+{
+    PcBuf *c = pc_doc_composite(d);
+    int r;
+    if (!c) return 0;
+    r = pcio_has_alpha(c->px, (size_t)c->w * c->h);
+    pc_buf_unref(c);
+    return r;
+}
+
+PcBuf *pc_save_preview(const PcDoc *d, int fmt, const PcSaveOpts *o, char *err, size_t errn)
+{
+    PcFlat f;
+    size_t np, i;
+    if (err && errn) err[0] = 0;
+    if (!d || d->s.nlayers <= 0) { pcio_seterr(err, errn, "The document has no layers."); return NULL; }
+    if (fmt == PC_FMT_JPEG) {
+        /* lossy: encode and decode, so the preview shows the real artefacts */
+        u8 *buf = NULL;
+        size_t n = 0;
+        PcDoc *r;
+        PcBuf *b;
+        if (pc_save_mem(d, fmt, o, &buf, &n, err, errn)) return NULL;
+        r = pc_load_mem(buf, n, "preview.jpg", err, errn);
+        free(buf);
+        if (!r) return NULL;
+        b = pc_doc_composite(r);
+        pc_doc_free(r);
+        return b;
+    }
+    if (fmt == PC_FMT_PSD) return pcio_composite(d, err, errn);
+    if (pcio_flat(d, fmt, o, &f, err, errn)) return NULL;
+    np = (size_t)f.c->w * f.c->h;
+    if (f.ix.idx) {
+        /* (the per-entry alpha is 255 unless the file stores transparency) */
+        for (i = 0; i < np; i++) {
+            u8 *p = f.c->px + i * 4;
+            int e = f.ix.idx[i];
+            p[0] = f.ix.pal[e * 3]; p[1] = f.ix.pal[e * 3 + 1]; p[2] = f.ix.pal[e * 3 + 2];
+            p[3] = f.ix.alpha[e];
+        }
+    }
+    {
+        PcBuf *b = f.c;
+        f.c = NULL;
+        pcio_flat_free(&f);
+        return b;
+    }
 }
 
 static const char *const fmt_names[PC_FMT_COUNT] = {
@@ -93,6 +182,8 @@ int pc_save_mem(const PcDoc *d, int fmt, const PcSaveOpts *o, u8 **out, size_t *
     *out = NULL; *outn = 0;
     if (!d || d->s.nlayers <= 0) { pcio_seterr(err, errn, "The document has no layers."); return -1; }
     if (!o) { pc_save_opts_default(&def); o = &def; }
+    /* the 1998 output rule holds for every caller (dialogs, Actions, code) */
+    if (pcio_check_depth(fmt, o->depth, err, errn)) return -1;
     switch (fmt) {
     case PC_FMT_PSD: return pc_psd_save(d, out, outn, err, errn);
     case PC_FMT_BMP: return pc_bmp_save(d, o, out, outn, err, errn);

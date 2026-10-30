@@ -48,7 +48,7 @@ static const MenuItem g_menu[] = {
 
     { 0, 0, "&Image" },
     { 1, 0, "&Mode" },
-    { 2, CMD_MODE_GRAY, NULL }, { 2, CMD_MODE_RGB, NULL },
+    { 2, CMD_MODE_GRAY, NULL }, { 2, CMD_MODE_INDEXED, NULL }, { 2, CMD_MODE_RGB, NULL },
     { 1, 0, "&Adjustments" },
     { 2, CMD_LEVELS, NULL }, { 2, CMD_AUTO_LEVELS, NULL }, { 2, CMD_CURVES, NULL }, { 2, CMD_COLOR_BALANCE, NULL },
     { 2, CMD_BRIGHTNESS_CONTRAST, NULL }, { 2, 0, "-" },

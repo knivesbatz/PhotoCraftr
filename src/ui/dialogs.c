@@ -2287,77 +2287,416 @@ int dlg_about(void)
     return 1;
 }
 
-/* ---------------- format options on save ---------------- */
+/* ---------------- "<Format> Options" and Indexed Color (the 1998 output rule) ----------------
+ *
+ * One dialog for every flat format: Color Depth radio buttons offer only
+ * the depths a 1998 studio could write in that format (pc_format_depths),
+ * then the Indexed Color controls of Photoshop 5 (Palette, Colors,
+ * Dither), transparency and the sprite colour key, the format's own
+ * options, and a 100% before/after preview of exactly what the file will
+ * hold.  fmt PC_FMT_UNKNOWN is Image > Mode > Indexed Color.
+ */
 
-int dlg_format_options(int fmt, PcSaveOpts *o)
+enum {
+    EX_DEPTH = 110, EX_GREEN6 = 114, EX_PALETTE = 120, EX_COLORS = 121, EX_DITHER = 122, EX_TRANSP = 123,
+    EX_PNGT = 124, EX_KEY = 125, EX_SWATCH = 126, EX_INTERLACE = 127, EX_RLE = 128, EX_TIFFC = 140,
+    EX_QUAL = 150, EX_QCOMBO = 151, EX_QSLIDER = 152, EX_ORIG = 160, EX_RES = 161, EX_INFO = 162
+};
+
+typedef struct {
+    const PcDoc *doc;
+    int fmt;
+    PcSaveOpts o;
+    int ndepth, depths[4];
+    int gray, docpal, transparent;
+    int pw, ph, px, py;
+    PcBuf *orig, *res;      /* full-size: composite and the converted result */
+} ExpCtx;
+
+static const char *depth_label(const ExpCtx *c, int depth)
 {
+    switch (depth) {
+    case 8:
+        if (c->fmt == PC_FMT_JPEG) return "&8 Bit Grayscale";
+        return c->gray ? "&8 Bit Grayscale" : "&8 Bit Indexed (256 colors)";
+    case 16: return c->fmt == PC_FMT_TGA ? "1&6 Bit High Color (1-5-5-5)" : "1&6 Bit High Color (5-5-5)";
+    case 24: return "&24 Bit True Color";
+    default: return c->fmt == PC_FMT_PNG ? "&32 Bit with Alpha (modern PNG)" : "&32 Bit with 8-bit Alpha";
+    }
+}
+
+static int exp_depth(Dlg *d)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    int i;
+    if (c->fmt == PC_FMT_UNKNOWN) return 8;
+    for (i = 0; i < c->ndepth; i++) if (dlg_get_check(d, EX_DEPTH + i)) return c->depths[i];
+    return c->ndepth ? c->depths[0] : 24;
+}
+
+static void exp_read(Dlg *d)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    PcSaveOpts *o = &c->o;
+    o->depth = exp_depth(d);
+    if (dlg_item(d, EX_GREEN6)) o->green6 = dlg_get_check(d, EX_GREEN6);
+    if (dlg_item(d, EX_PALETTE)) {
+        o->q.palette = PC_CLAMP(dlg_get_combo(d, EX_PALETTE), 0, PC_PAL_COUNT - 1);
+        o->q.colors = PC_CLAMP(dlg_get_int(d, EX_COLORS), 2, 256);
+        o->q.dither = PC_CLAMP(dlg_get_combo(d, EX_DITHER), 0, PC_DITHER_COUNT - 1);
+    }
+    if (dlg_item(d, EX_TRANSP)) o->q.transparency = dlg_get_check(d, EX_TRANSP);
+    if (dlg_item(d, EX_PNGT)) {
+        int t = dlg_get_combo(d, EX_PNGT);          /* None / Color key (1-bit) / Full alpha */
+        o->q.transparency = t > 0;
+        o->q.full_alpha = t == 2;
+    }
+    if (dlg_item(d, EX_KEY)) o->q.colorkey = dlg_get_check(d, EX_KEY);
+    if (dlg_item(d, EX_INTERLACE)) o->interlace = dlg_get_check(d, EX_INTERLACE);
+    if (dlg_item(d, EX_RLE)) o->tga_rle = dlg_get_check(d, EX_RLE);
+    if (dlg_item(d, EX_TIFFC)) o->tiff_compress = dlg_get_check(d, EX_TIFFC + 1) ? 1 : dlg_get_check(d, EX_TIFFC + 2) ? 2 : 0;
+    if (dlg_item(d, EX_QUAL)) o->jpeg_quality = PC_CLAMP(dlg_get_int(d, EX_QUAL), 0, 12);
+}
+
+/* Enable what the chosen depth and palette use. */
+static void exp_sync(Dlg *d)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    int depth = exp_depth(d), idx = depth == 8 && !c->gray && c->fmt != PC_FMT_JPEG;
+    int pal = dlg_item(d, EX_PALETTE) ? dlg_get_combo(d, EX_PALETTE) : 0;
+    if (dlg_item(d, EX_PALETTE)) {
+        dlg_enable(d, EX_PALETTE, idx);
+        dlg_enable(d, EX_COLORS, idx && (pal == PC_PAL_UNIFORM || pal == PC_PAL_ADAPTIVE));
+        dlg_enable(d, EX_DITHER, (idx && pal != PC_PAL_EXACT) || depth == 16);
+    }
+    if (dlg_item(d, EX_GREEN6)) dlg_enable(d, EX_GREEN6, depth == 16);
+    if (dlg_item(d, EX_PNGT)) dlg_enable(d, EX_PNGT, depth == 8);
+    if (dlg_item(d, EX_TRANSP) && c->fmt == PC_FMT_TGA) dlg_enable(d, EX_TRANSP, depth == 16);
+    if (dlg_item(d, EX_TRANSP) && c->fmt == PC_FMT_UNKNOWN) dlg_enable(d, EX_TRANSP, c->transparent);
+    if (dlg_item(d, EX_KEY)) { dlg_enable(d, EX_KEY, depth != 32); dlg_enable(d, EX_SWATCH, depth != 32); }
+}
+
+static void exp_crop(ExpCtx *c, const PcBuf *full, u8 *dst)
+{
+    int y;
+    for (y = 0; y < c->ph; y++)
+        memcpy(dst + (size_t)y * c->pw * 4, full->px + ((size_t)(c->py + y) * full->w + c->px) * 4, (size_t)c->pw * 4);
+}
+
+static void exp_preview(Dlg *d)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    char err[160] = "", info[96] = "";
+    HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    exp_read(d);
+    pc_buf_unref(c->res);
+    c->res = NULL;
+    if (c->fmt == PC_FMT_UNKNOWN) {
+        /* Indexed Color mode: the conversion pc_doc_to_indexed will make */
+        PcBuf *b = pc_buf_clone(c->orig);
+        PcIndexed ix;
+        if (b && !pc_quantize(b->px, b->w, b->h, &c->o.q, c->doc->index_ncolors ? c->doc->index_pal : NULL,
+                              c->doc->index_ncolors, c->doc->index_transparent, &ix)) {
+            size_t i, np = (size_t)b->w * b->h;
+            for (i = 0; i < np; i++) {
+                u8 *p = b->px + i * 4;
+                int e = ix.idx[i];
+                p[0] = ix.pal[e * 3]; p[1] = ix.pal[e * 3 + 1]; p[2] = ix.pal[e * 3 + 2];
+                p[3] = c->o.q.transparency ? ix.alpha[e] : 255;
+            }
+            pc_snprintf(info, sizeof info, "%d colors", ix.ncolors);
+            pc_indexed_free(&ix);
+            c->res = b;
+        } else {
+            pc_buf_unref(b);
+        }
+    } else {
+        c->res = pc_save_preview(c->doc, c->fmt, &c->o, err, sizeof err);
+        if (c->res) {
+            int depth = c->o.depth ? c->o.depth : pc_format_default_depth(c->fmt, c->gray, c->transparent);
+            if (c->fmt == PC_FMT_JPEG) pc_snprintf(info, sizeof info, "Baseline JPEG, %s", depth == 8 ? "grayscale" : "4:2:0");
+            else if (depth == 8) {
+                int n = pc_count_colors(c->res->px, (size_t)c->res->w * c->res->h, 256);
+                pc_snprintf(info, sizeof info, "%s%d colors", n > 256 ? "> " : "", PC_MIN(n, 256));
+            } else if (depth == 16) pc_snprintf(info, sizeof info, "High Color (%s colors)", c->o.green6 && c->fmt == PC_FMT_BMP ? "65,536" : "32,768");
+            else pc_snprintf(info, sizeof info, depth == 32 ? "True Color + 8-bit alpha" : "True Color (16.7 million)");
+        } else {
+            pc_strlcpy(info, err, sizeof info);
+        }
+    }
+    SetCursor(old);
+    dlg_set_text(d, EX_INFO, info);
+    dlg_redraw(d, EX_RES);
+}
+
+static void exp_paint(Dlg *d, int id, HDC dc, const RECT *r)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    const PcBuf *full = id == EX_ORIG ? c->orig : c->res;
+    BITMAPINFO bi;
+    u8 *px, *bgrx;
+    int i, n = c->pw * c->ph;
+    w95_fill(dc, r, W95_WINDOW);
+    w95_sunken(dc, r);
+    if (!full) return;
+    px = (u8 *)malloc((size_t)n * 4);
+    bgrx = (u8 *)malloc((size_t)n * 4);
+    if (px && bgrx) {
+        exp_crop(c, full, px);
+        for (i = 0; i < n; i++) {
+            const u8 *p = px + i * 4;
+            int a = p[3], bg = ((((i % c->pw) >> 3) ^ ((i / c->pw) >> 3)) & 1) ? 204 : 255;
+            bgrx[i * 4] = (u8)((p[2] * a + bg * (255 - a)) / 255); bgrx[i * 4 + 1] = (u8)((p[1] * a + bg * (255 - a)) / 255);
+            bgrx[i * 4 + 2] = (u8)((p[0] * a + bg * (255 - a)) / 255); bgrx[i * 4 + 3] = 0;
+        }
+        memset(&bi, 0, sizeof bi);
+        bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = c->pw; bi.bmiHeader.biHeight = -c->ph;
+        bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+        SetDIBitsToDevice(dc, r->left + 2, r->top + 2, (DWORD)c->pw, (DWORD)c->ph, 0, 0, 0, (UINT)c->ph, bgrx, &bi, DIB_RGB_COLORS);
+    }
+    free(px); free(bgrx);
+}
+
+static void exp_mouse(Dlg *d, int id, UINT msg, int x, int y, WPARAM wp)
+{
+    /* drag either pane to look at another part of the image (both follow) */
+    ExpCtx *c = (ExpCtx *)d->user;
+    static int lx, ly;
+    (void)id;
+    if (msg == WM_LBUTTONDOWN) { lx = x; ly = y; }
+    if (msg == WM_MOUSEMOVE && (wp & MK_LBUTTON)) {
+        c->px = PC_CLAMP(c->px - (x - lx), 0, PC_MAX(0, c->doc->s.w - c->pw));
+        c->py = PC_CLAMP(c->py - (y - ly), 0, PC_MAX(0, c->doc->s.h - c->ph));
+        lx = x; ly = y;
+        dlg_redraw(d, EX_ORIG);
+        dlg_redraw(d, EX_RES);
+    }
+}
+
+static void exp_swatch_paint(Dlg *d, int id, HDC dc, const RECT *r)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    RECT in = *r;
+    u32 k = c->o.q.key_rgb;
+    (void)id;
+    w95_sunken(dc, r);
+    InflateRect(&in, -2, -2);
+    w95_fill(dc, &in, RGB(pc_r(k), pc_g(k), pc_b(k)));
+}
+
+static void exp_swatch_mouse(Dlg *d, int id, UINT msg, int x, int y, WPARAM wp)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    u32 k = c->o.q.key_rgb;
+    (void)id; (void)x; (void)y; (void)wp;
+    if (msg != WM_LBUTTONUP || !IsWindowEnabled(dlg_item(d, EX_SWATCH))) return;
+    if (dlg_color_picker("Color Key", &k)) {
+        c->o.q.key_rgb = k & 0xFFFFFF;
+        dlg_redraw(d, EX_SWATCH);
+        exp_preview(d);
+    }
+}
+
+static void exp_change(Dlg *d, int id, int code)
+{
+    ExpCtx *c = (ExpCtx *)d->user;
+    if (id == IDOK || id == IDCANCEL) return;
+    if (id == EX_QSLIDER) {
+        dlg_set_int(d, EX_QUAL, dlg_slider_get(d, EX_QSLIDER));
+        if (code != DLG_CODE_SLIDER) exp_preview(d);
+        return;
+    }
+    if (id == EX_QCOMBO && code == DLG_CODE_CHANGE) {
+        static const int qv[4] = { 3, 5, 8, 10 };
+        int k = PC_CLAMP(dlg_get_combo(d, EX_QCOMBO), 0, 3);
+        d->busy = 1;
+        dlg_set_int(d, EX_QUAL, qv[k]);
+        dlg_slider_set(d, EX_QSLIDER, qv[k]);
+        d->busy = 0;
+        exp_preview(d);
+        return;
+    }
+    if (id == EX_QUAL) {
+        int q = PC_CLAMP(dlg_get_int(d, EX_QUAL), 0, 12);
+        d->busy = 1;
+        dlg_slider_set(d, EX_QSLIDER, q);
+        dlg_set_combo(d, EX_QCOMBO, q >= 10 ? 3 : q >= 8 ? 2 : q >= 5 ? 1 : 0);
+        d->busy = 0;
+    }
+    if (id == EX_COLORS && code == DLG_CODE_CHANGE && GetFocus() == dlg_item(d, EX_COLORS)) return;   /* wait for focus loss / Enter */
+    (void)c;
+    exp_sync(d);
+    exp_preview(d);
+}
+
+/* Shared body: fmt PC_FMT_UNKNOWN for Image > Mode > Indexed Color. */
+static int export_dialog(const PcDoc *doc, int fmt, PcSaveOpts *o)
+{
+    static const char *const dith[PC_DITHER_COUNT] = { "None", "Pattern", "Diffusion" };
+    static const char *const qnames[] = { "Low", "Medium", "High", "Maximum" };
+    static const char *const pngt[] = { "None", "Color Key (1-bit)", "Full Alpha" };
+    const char *pals[PC_PAL_COUNT];
+    char title[48], b[16];
+    ExpCtx *c = (ExpCtx *)calloc(1, sizeof *c);
     Dlg *d;
-    int rc;
+    int W = 480, x0 = 10, gw = 240, y = 8, i, rc, sel = 0, h, depth, idx_ok;
+    if (!c) return 0;
+    c->doc = doc; c->fmt = fmt; c->o = *o;
+    c->gray = doc->s.mode == PC_MODE_GRAY && fmt != PC_FMT_UNKNOWN;
+    c->docpal = doc->index_ncolors > 0;
+    c->orig = pc_doc_composite(doc);
+    if (!c->orig) { free(c); return 0; }
+    if (doc->s.mode == PC_MODE_GRAY) {
+        size_t k, np = (size_t)doc->s.w * doc->s.h;
+        for (k = 0; k < np; k++) { u8 *p = c->orig->px + k * 4; p[0] = p[1] = p[2] = (u8)pc_luma(p[0], p[1], p[2]); }
+    }
+    {
+        size_t k, np = (size_t)doc->s.w * doc->s.h;
+        for (k = 0; k < np && !c->transparent; k++) c->transparent = c->orig->px[k * 4 + 3] != 255;
+    }
+    c->ndepth = fmt == PC_FMT_UNKNOWN ? 0 : pc_format_depths(fmt, c->depths);
+    depth = c->o.depth ? c->o.depth : pc_format_default_depth(fmt, c->gray, c->transparent);
+    if (!pc_format_depth_ok(fmt, depth)) depth = pc_format_default_depth(fmt, c->gray, c->transparent);
+    if (c->o.q.palette == PC_PAL_DOCUMENT && !c->docpal) c->o.q.palette = PC_PAL_ADAPTIVE;
+    for (i = 0; i < PC_PAL_COUNT; i++) pals[i] = pc_palette_name(i);
+    idx_ok = fmt == PC_FMT_UNKNOWN || (fmt != PC_FMT_JPEG && pc_format_depth_ok(fmt, 8));
+    if (fmt == PC_FMT_UNKNOWN) pc_strlcpy(title, "Indexed Color", sizeof title);
+    else {
+        const char *nm = pc_format_name(fmt), *sp = strchr(nm, ' ');
+        char base[24];
+        size_t L = sp ? (size_t)(sp - nm) : strlen(nm);
+        if (fmt == PC_FMT_GIF) { nm = "GIF"; L = 3; }
+        if (L >= sizeof base) L = sizeof base - 1;
+        memcpy(base, nm, L); base[L] = 0;
+        pc_snprintf(title, sizeof title, "%s Options", base);
+    }
+    /* height of the left column (the same steps as the layout below) */
+    h = 8;
+    if (c->ndepth) h += 30 + c->ndepth * 18 + (fmt == PC_FMT_BMP ? 18 : 0);
+    if (idx_ok) h += 106;
+    if (fmt == PC_FMT_JPEG) h += 98;
+    else h += 30 + 22 * (1 + (fmt == PC_FMT_GIF || fmt == PC_FMT_PNG || fmt == PC_FMT_TGA || fmt == PC_FMT_UNKNOWN));
+    if (fmt == PC_FMT_GIF || fmt == PC_FMT_TGA) h += 52;
+    if (fmt == PC_FMT_TIFF) h += 88;
+    h = PC_MAX(h + 2, 300);
+    d = dlg_create(title, W, h, exp_change, c);
+    if (!d) { pc_buf_unref(c->orig); free(c); return 0; }
+    d->busy = 1;
+
+    /* ---- Color Depth ---- */
+    if (c->ndepth) {
+        int gh = 22 + c->ndepth * 18 + (fmt == PC_FMT_BMP ? 18 : 0);
+        dlg_group(d, x0, y, gw, gh, "Color Depth");
+        for (i = 0; i < c->ndepth; i++) {
+            dlg_radio(d, EX_DEPTH + i, x0 + 12, y + 18 + i * 18, gw - 20, 16, depth_label(c, c->depths[i]), c->depths[i] == depth, i == 0);
+            if (c->depths[i] == depth) sel = 1;
+        }
+        if (!sel) dlg_set_check(d, EX_DEPTH, 1);
+        if (fmt == PC_FMT_BMP) dlg_check(d, EX_GREEN6, x0 + 30, y + 18 + c->ndepth * 18, gw - 40, 16, "Use 5-&6-5 (BI_BITFIELDS)", c->o.green6);
+        y += gh + 8;
+    }
+    /* ---- Indexed Color (also the dither of 16-bit high colour) ---- */
+    if (idx_ok) {
+        dlg_group(d, x0, y, gw, 98, fmt == PC_FMT_UNKNOWN ? "Palette" : "Indexed Color");
+        dlg_label(d, x0 + 12, y + 22, 60, 16, "&Palette:");
+        dlg_combo(d, EX_PALETTE, x0 + 76, y + 19, gw - 88, 20, pals, c->docpal ? PC_PAL_COUNT : PC_PAL_COUNT - 1, c->o.q.palette);
+        dlg_label(d, x0 + 12, y + 48, 60, 16, "&Colors:");
+        pc_snprintf(b, sizeof b, "%d", c->o.q.colors);
+        dlg_edit(d, EX_COLORS, x0 + 76, y + 45, 44, 20, b, DLG_NUMBER);
+        dlg_label(d, x0 + 126, y + 48, 100, 16, "(2-256)");
+        dlg_label(d, x0 + 12, y + 74, 60, 16, "&Dither:");
+        dlg_combo(d, EX_DITHER, x0 + 76, y + 71, gw - 88, 20, dith, PC_DITHER_COUNT, c->o.q.dither);
+        y += 106;
+    }
+    /* ---- JPEG quality (Photoshop 0-12) ---- */
     if (fmt == PC_FMT_JPEG) {
-        static const char *const q[] = { "Low", "Medium", "High", "Maximum" };
-        char b[8];
-        d = dlg_create("JPEG Options", 360, 110, NULL, NULL);
-        if (!d) return 0;
-        dlg_group(d, 10, 8, 260, 90, "Image Options");
-        dlg_label(d, 22, 30, 50, 16, "Quality:");
-        pc_snprintf(b, sizeof b, "%d", o->jpeg_quality);
-        dlg_edit(d, 100, 76, 27, 36, 20, b, DLG_NUMBER);
-        dlg_combo(d, 101, 120, 27, 100, 20, q, 4, o->jpeg_quality >= 10 ? 3 : o->jpeg_quality >= 8 ? 2 : o->jpeg_quality >= 5 ? 1 : 0);
-        dlg_slider(d, 102, 22, 56, 236, 0, 12, o->jpeg_quality, 100, 0);
-        dlg_label(d, 22, 76, 60, 14, "small file");
-        dlg_label(d, 190, 76, 70, 14, "large file");
-        ok_cancel(d, 360);
-        rc = dlg_run(d);
-        if (rc == IDOK) o->jpeg_quality = PC_CLAMP(dlg_get_int(d, 100), 0, 12);
-        dlg_destroy(d);
-        return rc == IDOK;
+        int q = c->o.jpeg_quality;
+        dlg_group(d, x0, y, gw, 90, "Image Options");
+        dlg_label(d, x0 + 12, y + 22, 50, 16, "&Quality:");
+        pc_snprintf(b, sizeof b, "%d", q);
+        dlg_edit(d, EX_QUAL, x0 + 64, y + 19, 36, 20, b, DLG_NUMBER);
+        dlg_combo(d, EX_QCOMBO, x0 + 108, y + 19, 100, 20, qnames, 4, q >= 10 ? 3 : q >= 8 ? 2 : q >= 5 ? 1 : 0);
+        dlg_slider(d, EX_QSLIDER, x0 + 12, y + 48, gw - 24, 0, 12, q, 0, 0);
+        dlg_label(d, x0 + 12, y + 68, 60, 14, "small file");
+        dlg_label(d, x0 + gw - 70, y + 68, 60, 14, "large file");
+        y += 98;
     }
-    if (fmt == PC_FMT_TIFF) {
-        d = dlg_create("TIFF Options", 320, 100, NULL, NULL);
-        if (!d) return 0;
-        dlg_group(d, 10, 8, 200, 78, "Compression");
-        dlg_radio(d, 100, 22, 26, 150, 16, "&None", o->tiff_compress == 0, 1);
-        dlg_radio(d, 101, 22, 44, 150, 16, "&LZW", o->tiff_compress == 1, 0);
-        dlg_radio(d, 102, 22, 62, 150, 16, "&PackBits", o->tiff_compress == 2, 0);
-        ok_cancel(d, 320);
-        rc = dlg_run(d);
-        if (rc == IDOK) o->tiff_compress = dlg_get_check(d, 101) ? 1 : dlg_get_check(d, 102) ? 2 : 0;
-        dlg_destroy(d);
-        return rc == IDOK;
+    /* ---- Transparency and the colour key ---- */
+    if (fmt != PC_FMT_JPEG) {
+        int rows = 1 + (fmt == PC_FMT_GIF || fmt == PC_FMT_PNG || fmt == PC_FMT_TGA || fmt == PC_FMT_UNKNOWN);
+        int ry = y + 18;
+        dlg_group(d, x0, y, gw, 22 + rows * 22, "Transparency");
+        if (fmt == PC_FMT_GIF || fmt == PC_FMT_UNKNOWN) {
+            dlg_check(d, EX_TRANSP, x0 + 12, ry, gw - 24, 16, "&Transparency", c->o.q.transparency);
+            ry += 22;
+        } else if (fmt == PC_FMT_TGA) {
+            dlg_check(d, EX_TRANSP, x0 + 12, ry, gw - 24, 16, "1-bit &alpha at 16 bit", c->o.q.transparency);
+            ry += 22;
+        } else if (fmt == PC_FMT_PNG) {
+            dlg_label(d, x0 + 12, ry + 3, 76, 16, "&Transparency:");
+            dlg_combo(d, EX_PNGT, x0 + 92, ry, gw - 104, 20, pngt, 3, !c->o.q.transparency ? 0 : c->o.q.full_alpha ? 2 : 1);
+            ry += 22;
+        }
+        dlg_check(d, EX_KEY, x0 + 12, ry, gw - 54, 16, "Transparent = color &key:", c->o.q.colorkey);
+        dlg_custom(d, EX_SWATCH, x0 + gw - 40, ry - 2, 28, 20, exp_swatch_paint, exp_swatch_mouse);
+        y += 30 + rows * 22;
     }
+    /* ---- the format's own options ---- */
     if (fmt == PC_FMT_GIF) {
-        d = dlg_create("GIF Options", 320, 100, NULL, NULL);
-        if (!d) return 0;
-        dlg_check(d, 100, 14, 14, 200, 16, "&Diffusion dither", o->gif_dither);
-        dlg_check(d, 101, 14, 36, 200, 16, "Keep &transparency", o->gif_transparency);
-        dlg_check(d, 102, 14, 58, 200, 16, "&Interlaced", o->gif_interlace);
-        ok_cancel(d, 320);
-        rc = dlg_run(d);
-        if (rc == IDOK) { o->gif_dither = dlg_get_check(d, 100); o->gif_transparency = dlg_get_check(d, 101); o->gif_interlace = dlg_get_check(d, 102); }
-        dlg_destroy(d);
-        return rc == IDOK;
+        dlg_group(d, x0, y, gw, 44, "Options");
+        dlg_check(d, EX_INTERLACE, x0 + 12, y + 18, gw - 24, 16, "&Interlaced", c->o.interlace);
+        y += 52;
+    } else if (fmt == PC_FMT_TGA) {
+        dlg_group(d, x0, y, gw, 44, "Options");
+        dlg_check(d, EX_RLE, x0 + 12, y + 18, gw - 24, 16, "Compress (&RLE)", c->o.tga_rle);
+        y += 52;
+    } else if (fmt == PC_FMT_TIFF) {
+        dlg_group(d, x0, y, gw, 80, "Compression");
+        dlg_radio(d, EX_TIFFC, x0 + 12, y + 18, 150, 16, "&None", c->o.tiff_compress == 0, 1);
+        dlg_radio(d, EX_TIFFC + 1, x0 + 12, y + 36, 150, 16, "&LZW", c->o.tiff_compress == 1, 0);
+        dlg_radio(d, EX_TIFFC + 2, x0 + 12, y + 54, 150, 16, "Pack&Bits", c->o.tiff_compress == 2, 0);
+        y += 88;
     }
-    if (fmt == PC_FMT_BMP) {
-        d = dlg_create("BMP Options", 320, 90, NULL, NULL);
-        if (!d) return 0;
-        dlg_group(d, 10, 8, 200, 62, "Depth");
-        dlg_radio(d, 100, 22, 26, 150, 16, "&24 Bit", o->bmp_depth != 32, 1);
-        dlg_radio(d, 101, 22, 46, 170, 16, "&32 Bit (with alpha)", o->bmp_depth == 32, 0);
-        ok_cancel(d, 320);
-        rc = dlg_run(d);
-        if (rc == IDOK) o->bmp_depth = dlg_get_check(d, 101) ? 32 : 24;
-        dlg_destroy(d);
-        return rc == IDOK;
+    /* ---- 100% before / after preview ---- */
+    c->pw = PC_MIN(132, doc->s.w); c->ph = PC_MIN(104, doc->s.h);
+    c->px = (doc->s.w - c->pw) / 2; c->py = (doc->s.h - c->ph) / 2;
+    dlg_label(d, 260, 8, 136, 14, "Original:");
+    dlg_custom(d, EX_ORIG, 260, 22, 136, 108, exp_paint, exp_mouse);
+    dlg_label(d, 260, 136, 136, 14, fmt == PC_FMT_UNKNOWN ? "Indexed:" : "As saved (1998):");
+    dlg_custom(d, EX_RES, 260, 150, 136, 108, exp_paint, exp_mouse);
+    dlg_label_id(d, EX_INFO, 260, 262, 210, 30, "", 0);
+    ok_cancel(d, W);
+
+    d->busy = 0;
+    exp_sync(d);
+    exp_preview(d);
+    rc = dlg_run(d);
+    if (rc == IDOK) {
+        exp_read(d);
+        if (fmt == PC_FMT_UNKNOWN) c->o.depth = 0;
+        *o = c->o;
     }
-    if (fmt == PC_FMT_TGA) {
-        d = dlg_create("Targa Options", 300, 70, NULL, NULL);
-        if (!d) return 0;
-        dlg_check(d, 100, 14, 18, 160, 16, "&Compress (RLE)", o->tga_rle);
-        ok_cancel(d, 300);
-        rc = dlg_run(d);
-        if (rc == IDOK) o->tga_rle = dlg_get_check(d, 100);
-        dlg_destroy(d);
-        return rc == IDOK;
-    }
+    dlg_destroy(d);
+    pc_buf_unref(c->orig);
+    pc_buf_unref(c->res);
+    free(c);
+    return rc == IDOK;
+}
+
+int dlg_format_options(const PcDoc *doc, int fmt, PcSaveOpts *o)
+{
+    if (fmt == PC_FMT_PSD || fmt <= PC_FMT_UNKNOWN || fmt >= PC_FMT_COUNT) return 1;   /* PSD: always 8 bits/channel */
+    return export_dialog(doc, fmt, o);
+}
+
+int dlg_indexed_color(PcDoc *doc, PcQuantOpts *q)
+{
+    PcSaveOpts o;
+    pc_save_opts_default(&o);
+    o.q = *q;
+    o.q.full_alpha = 0;                    /* Indexed Color mode is the 1998 binary kind */
+    if (!pc_doc_has_transparency(doc)) o.q.transparency = 0;
+    if (!export_dialog(doc, PC_FMT_UNKNOWN, &o)) return 0;
+    *q = o.q;
     return 1;
 }

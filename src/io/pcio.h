@@ -9,6 +9,7 @@
 #define PCIO_H
 
 #include "core/pcdoc.h"
+#include "core/pcquant.h"
 
 typedef enum {
     PC_FMT_UNKNOWN = 0,
@@ -16,19 +17,47 @@ typedef enum {
     PC_FMT_COUNT
 } PcFormat;
 
+/*
+ * The 1998 output rule: flat formats are written only at the colour depths
+ * a game studio of 1998 could produce (bits per pixel):
+ *
+ *   BMP   8 (palette), 16 (5-5-5 BI_RGB, or 5-6-5 BI_BITFIELDS), 24
+ *   TGA   8 (colour-mapped), 16 (A1R5G5B5), 24, 32 (8-bit alpha); RLE optional
+ *   GIF   8 (GIF89a, transparency, interlace)
+ *   PNG   8 (PLTE, tRNS), 24, 32 - never 16 bits per channel
+ *   TIFF  8 (palette colour), 24; none / LZW / PackBits
+ *   JPEG  8 (grayscale) or 24: baseline, 4:2:0 chroma, Photoshop 0-12 quality
+ *   PSD   8 bits per channel (8 = gray, 24/32 = RGB): depth is not a choice
+ *
+ * Grayscale documents write depth 8 as an 8-bit gray image (gray palette,
+ * gray Targa/PNG/TIFF/JPEG).  Depth 0 means "the format's default for this
+ * document".  pc_save_mem refuses every other depth, whatever the caller.
+ */
 typedef struct PcSaveOpts {
-    int jpeg_quality;     /* 0..12 Photoshop-style scale (mapped to 1..100); default 8 */
+    int depth;            /* bits per pixel (see above); 0 = default */
+    int green6;           /* 16-bit BMP: 5-6-5 via BI_BITFIELDS instead of 5-5-5 */
+    PcQuantOpts q;        /* depth 8 palette / colours / dither (dither also for 16-bit),
+                           * transparency, colour key */
+    int interlace;        /* GIF */
     int tiff_compress;    /* 0 none, 1 LZW, 2 PackBits */
-    int gif_dither;       /* 0 none, 1 diffusion */
-    int gif_transparency; /* keep fully transparent pixels transparent */
-    int gif_interlace;
-    int png_interlace;    /* ignored (always non-interlaced) */
-    int bmp_depth;        /* 24 or 32 (32 keeps alpha); gray docs write 8-bit */
     int tga_rle;
-    int save_alpha;       /* keep transparency where the format allows */
+    int jpeg_quality;     /* 0..12 Photoshop-style scale (mapped to 1..100); default 8 */
 } PcSaveOpts;
 
 void pc_save_opts_default(PcSaveOpts *o);
+
+/* Allowed depths of a format, ascending (at most 4); returns the count. */
+int pc_format_depths(int fmt, int *depths);
+int pc_format_depth_ok(int fmt, int depth);  /* 0 is always allowed */
+/* The default depth: BMP/TIFF/JPEG 24, TGA/PNG 24 (32 with transparency),
+ * GIF 8; gray documents 8 (PNG 32 with transparency, TGA 32 likewise). */
+int pc_format_default_depth(int fmt, int gray, int transparent);
+/* Whether the document's composite has any transparent pixel. */
+int pc_doc_has_transparency(const PcDoc *d);
+/* The image exactly as it will be stored (palette colours, high colour,
+ * JPEG artefacts; alpha 0 where the file is transparent), for previews.
+ * Free with pc_buf_unref. */
+PcBuf *pc_save_preview(const PcDoc *d, int fmt, const PcSaveOpts *o, char *err, size_t errn);
 
 const char *pc_format_name(int fmt);          /* "Photoshop (*.PSD)" style label */
 const char *pc_format_ext(int fmt);           /* "psd" */
