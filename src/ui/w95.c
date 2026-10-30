@@ -24,8 +24,16 @@ static HFONT make_font(const char *face, int pt, int bold)
                        DEFAULT_PITCH | FF_SWISS, face);
 }
 
-typedef BOOL (WINAPI *SetThemeAppPropertiesFn)(DWORD);
+typedef void (WINAPI *SetThemeAppPropertiesFn)(DWORD);
 typedef BOOL (WINAPI *SetProcessDPIAwareFn)(void);
+
+static SetThemeAppPropertiesFn g_set_theme_props;
+
+void w95_allow_themes(int on)
+{
+    /* STAP_ALLOW_NONCLIENT | STAP_ALLOW_CONTROLS | STAP_ALLOW_WEBCONTENT */
+    if (g_set_theme_props) g_set_theme_props(on ? 7 : 0);
+}
 
 void w95_init(HINSTANCE inst)
 {
@@ -39,8 +47,8 @@ void w95_init(HINSTANCE inst)
      * because uxtheme.dll does not exist before XP. */
     m = LoadLibraryA("uxtheme.dll");
     if (m) {
-        SetThemeAppPropertiesFn f = (SetThemeAppPropertiesFn)(void *)GetProcAddress(m, "SetThemeAppProperties");
-        if (f) f(0);
+        g_set_theme_props = (SetThemeAppPropertiesFn)(void *)GetProcAddress(m, "SetThemeAppProperties");
+        w95_allow_themes(0);
     }
     /* Vista+: render 1:1 instead of letting DWM blur-stretch the pixel art. */
     m = GetModuleHandleA("user32.dll");

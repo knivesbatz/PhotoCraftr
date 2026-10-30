@@ -50,6 +50,7 @@ int w95_text_width(HDC dc, W95FontId f, const char *s);
 
 /* ---------------- init ---------------- */
 void w95_init(HINSTANCE inst);
+void w95_allow_themes(int on);   /* XP+ visual styles for windows created from now on */
 HINSTANCE w95_inst(void);
 extern int g_w95_gradient_captions;   /* Windows 98 style captions (Preferences) */
 

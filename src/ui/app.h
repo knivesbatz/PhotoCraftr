@@ -157,6 +157,7 @@ typedef struct Prefs {
     int grid_spacing;
     u32 grid_color, guide_color;
     int tab_docs;            /* open documents as tabs (CS6) instead of floating windows */
+    int classic_file_dialogs;/* built-in Windows 95-style Open/Save instead of the system's */
 } Prefs;
 
 #define MAX_VIEWS 64
