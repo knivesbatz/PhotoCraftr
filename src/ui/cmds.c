@@ -210,7 +210,8 @@ void cmd_state(int cmd, int *en, int *ck)
     case CMD_RESELECT: *en = g_last_sel && g_last_sel_w == d->s.w && g_last_sel_h == d->s.h; break;
     case CMD_LOAD_SELECTION: *en = d->s.nchannels > 0; break;
     case CMD_MODE_GRAY: *ck = d->s.mode == PC_MODE_GRAY; break;
-    case CMD_MODE_RGB: *ck = d->s.mode == PC_MODE_RGB; break;
+    case CMD_MODE_INDEXED: *ck = d->s.mode == PC_MODE_RGB && d->index_ncolors > 0; break;
+    case CMD_MODE_RGB: *ck = d->s.mode == PC_MODE_RGB && !d->index_ncolors; break;
     case CMD_LAYER_FROM_BG: *en = l && l->is_background; break;
     case CMD_DELETE_LAYER: *en = d->s.nlayers > 1; break;
     case CMD_MERGE_DOWN: *en = d->s.active > 0 && l && d->s.layers[d->s.active - 1]->visible; break;
@@ -608,9 +609,34 @@ void cmd_run(int cmd)
     case CMD_MODE_GRAY:
         if (d->s.mode == PC_MODE_GRAY) return;
         if (d->s.nlayers > 1 && app_confirm(APP_NAME, "Changing modes affects all layers. Discard color information?") != 1) return;
-        if (!pc_doc_to_gray(d)) { commit(d, "Grayscale"); REC0(cmd); }
+        if (!pc_doc_to_gray(d)) { d->index_ncolors = 0; commit(d, "Grayscale"); REC0(cmd); }
         return;
-    case CMD_MODE_RGB: if (!pc_doc_to_rgb(d)) { commit(d, "RGB Color"); REC0(cmd); } return;
+    case CMD_MODE_RGB:
+        if (d->s.mode == PC_MODE_RGB && d->index_ncolors) {
+            /* leaving Indexed Color: the pixels stay, the palette is forgotten */
+            d->index_ncolors = 0;
+            d->dirty = 1;
+            app_refresh(R_TITLE | R_TABS);
+            REC0(cmd);
+            return;
+        }
+        if (!pc_doc_to_rgb(d)) { commit(d, "RGB Color"); REC0(cmd); }
+        return;
+    case CMD_MODE_INDEXED: {
+        /* Photoshop 5's Image > Mode > Indexed Color: flatten, reduce to a palette */
+        PcQuantOpts q;
+        settings_load_indexed(&q);
+        if (!d->index_ncolors && q.palette == PC_PAL_DOCUMENT) q.palette = PC_PAL_ADAPTIVE;
+        if (!play_params(&q, sizeof q)) {
+            if (d->s.nlayers > 1 && app_confirm(APP_NAME, "Flatten layers?") != 1) return;
+            if (!dlg_indexed_color(d, &q)) return;
+            settings_store_indexed(&q);
+        }
+        busy(1);
+        if (!pc_doc_to_indexed(d, &q)) { commit(d, "Indexed Color"); REC(cmd, q); }
+        busy(0);
+        return;
+    }
     case CMD_LEVELS: {
         PcLevels lv;
         pc_levels_default(&lv);

@@ -1,8 +1,9 @@
 /*
  * JPEG: decoding by stb_image (baseline and progressive, gray/YCbCr/
  * Adobe CMYK); encoding by our own small baseline encoder below (JFIF,
- * 1 component for Grayscale documents, YCbCr with 4:2:0 chroma below
- * quality 90 otherwise, the standard ITU T.81 Annex K tables).  The
+ * sequential baseline only - never progressive; 1 component at depth 8
+ * (the default for Grayscale documents), YCbCr with 4:2:0 chroma at
+ * depth 24 at every quality, the standard ITU T.81 Annex K tables).  The
  * resolution is read from and written to the JFIF APP0 header.
  *
  * (stb_image_write's encoder always writes three components, so it
@@ -197,7 +198,7 @@ static int jpeg_encode(PcWr *w, const u8 *px, int W, int H, int ch, int quality,
 {
     static const float aan[8] = { 1.0f, 1.387039845f, 1.306562965f, 1.175875602f, 1.0f, 0.785694958f, 0.541196100f, 0.275899379f };
     JEnc *e = (JEnc *)calloc(1, sizeof *e);
-    int sub = ch == 3 && quality <= 90, scale, t, i, k, x, y, mcu = sub ? 16 : 8;
+    int sub = ch == 3, scale, t, i, k, x, y, mcu = sub ? 16 : 8;     /* colour is always 4:2:0 */
     u8 qt[2][64];
     if (!e) return -1;
     e->w = w;
@@ -277,12 +278,16 @@ int pc_jpeg_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
 {
     PcBuf *c;
     size_t np, i;
-    int gray = d->s.mode == PC_MODE_GRAY, ch = gray ? 1 : 3, q, rc;
+    int depth = o ? o->depth : 0, gray, ch, q, rc;
     int qual = o ? PC_CLAMP(o->jpeg_quality, 0, 12) : 8;
     u8 *px, *p;
     PcWr w;
     memset(&w, 0, sizeof w);
     *out = NULL; *outn = 0;
+    if (pcio_check_depth(PC_FMT_JPEG, depth, err, errn)) return -1;
+    if (!depth) depth = d->s.mode == PC_MODE_GRAY ? 8 : 24;
+    gray = depth == 8;
+    ch = gray ? 1 : 3;
     if (d->s.w > 65535 || d->s.h > 65535) { pcio_seterr(err, errn, "The image is too large for JPEG."); return -1; }
     c = pcio_composite(d, err, errn);
     if (!c) return -1;
@@ -291,7 +296,7 @@ int pc_jpeg_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, ch
     px = (u8 *)pc_alloc_checked(np, (size_t)ch, 1, 0);
     if (!px) { pc_buf_unref(c); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
     for (i = 0, p = px; i < np; i++) {
-        *p++ = c->px[i * 4];
+        *p++ = gray ? (u8)pcio_gray_of(c->px + i * 4) : c->px[i * 4];
         if (!gray) { *p++ = c->px[i * 4 + 1]; *p++ = c->px[i * 4 + 2]; }
     }
     q = 10 + qual * 90 / 12;

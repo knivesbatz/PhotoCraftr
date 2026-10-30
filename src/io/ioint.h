@@ -12,6 +12,7 @@
 #define PCIO_INT_H
 
 #include "io/pcio.h"
+#include "core/pcquant.h"
 
 typedef unsigned short u16;
 
@@ -125,6 +126,28 @@ static inline int pcio_gray_of(const u8 *p) { return pc_luma(p[0], p[1], p[2]); 
 
 u32 pcio_crc32(u32 crc, const u8 *p, size_t n);      /* zlib/PNG CRC; start with 0 */
 
+/* ---------------- the 1998 output rule (iocommon.c) ---------------- */
+
+/* The composite reduced to what a flat format stores at a depth:
+ *  - depth 32: RGBA untouched (gray documents keep R=G=B);
+ *  - depth 24: matted on white, or transparent pixels set to the colour key;
+ *  - depth 16: as 24 (Targa with transparency keeps a 1-bit alpha), then
+ *    rounded to high colour with the chosen dither;
+ *  - depth 8: an 8-bit gray image (gray set; gray documents without
+ *    transparency to keep) or palette indices in ix.
+ * Refuses depths outside the format's set with a message. */
+typedef struct PcFlat {
+    PcBuf *c;             /* RGBA (alpha 0/255 except at depth 32) */
+    int depth;            /* resolved bits per pixel */
+    int gray;             /* depth 8: single gray channel (c holds R=G=B) */
+    int alpha;            /* alpha is written (32-bit, Targa 16-bit A1R5G5B5) */
+    PcIndexed ix;         /* depth 8 colour (ix.idx NULL otherwise) */
+} PcFlat;
+int pcio_flat(const PcDoc *d, int fmt, const PcSaveOpts *o, PcFlat *f, char *err, size_t errn);
+void pcio_flat_free(PcFlat *f);
+/* Depth check alone (used by the writers that do not need pcio_flat). */
+int pcio_check_depth(int fmt, int depth, char *err, size_t errn);
+
 /* PackBits (TIFF / Photoshop RLE). */
 size_t pcio_packbits_encode(const u8 *src, size_t n, u8 *dst);   /* dst >= n + n/128 + 2 */
 /* Decodes into exactly outn bytes (zero-fills when the input ends early).
@@ -144,6 +167,7 @@ int pcio_stbi_info(const u8 *data, size_t n, int *w, int *h, int *comp);
 /* zlib inflate into a buffer of exactly outn bytes; returns bytes written or -1. */
 long pcio_inflate(u8 *out, size_t outn, const u8 *in, size_t inn, int zlib_header);
 int pcio_stbi_write_png(PcWr *w, int width, int height, int comp, const u8 *px);
-int pcio_stbi_write_tga(PcWr *w, int width, int height, int comp, const u8 *px, int rle);
+/* zlib stream of n bytes (free with free()); NULL when out of memory. */
+u8 *pcio_zlib_compress(const u8 *data, size_t n, size_t *outn);
 
 #endif

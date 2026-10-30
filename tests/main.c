@@ -5,12 +5,13 @@ int g_test_failures, g_test_checks;
 
 int test_core(void) __attribute__((weak));
 int test_io(void) __attribute__((weak));
+int test_quant(void) __attribute__((weak));
 int test_updater(void) __attribute__((weak));
 
 int main(void)
 {
     struct { const char *name; int (*fn)(void); } suites[] = {
-        { "core", test_core }, { "io", test_io }, { "updater", test_updater },
+        { "core", test_core }, { "quant", test_quant }, { "io", test_io }, { "updater", test_updater },
     };
     unsigned i;
     for (i = 0; i < sizeof suites / sizeof suites[0]; i++) {

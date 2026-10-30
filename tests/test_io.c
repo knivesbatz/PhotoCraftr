@@ -45,6 +45,16 @@ static unsigned rng(void)
     return rng_state;
 }
 
+static unsigned get_u16le_t(const u8 *p) { return (unsigned)(p[0] | p[1] << 8); }
+static unsigned get_u32le_t(const u8 *p) { return (unsigned)p[0] | (unsigned)p[1] << 8 | (unsigned)p[2] << 16 | (unsigned)p[3] << 24; }
+/* Offset + 1 of the first occurrence of a 4-character tag, 0 if absent. */
+static size_t memmem_t(const u8 *p, size_t n, const char *tag)
+{
+    size_t i;
+    for (i = 0; i + 4 <= n; i++) if (!memcmp(p + i, tag, 4)) return i + 1;
+    return 0;
+}
+
 static void dump(const char *name, const u8 *p, size_t n)
 {
     const char *dir = getenv("PC_TEST_DUMP");
@@ -200,23 +210,29 @@ static void test_formats(void)
 
     pc_save_opts_default(&o);
     test_lossless(PC_FMT_PNG, &o, 1, "png");
-    o.tiff_compress = 0; test_lossless(PC_FMT_TIFF, &o, 1, "tif_raw");
-    o.tiff_compress = 1; test_lossless(PC_FMT_TIFF, &o, 1, "tif_lzw");
-    o.tiff_compress = 2; test_lossless(PC_FMT_TIFF, &o, 1, "tif_pb");
+    /* (TIFF stores 8 or 24 bits per pixel only: transparency is matted) */
+    o.tiff_compress = 0; test_lossless(PC_FMT_TIFF, &o, 0, "tif_raw");
+    o.tiff_compress = 1; test_lossless(PC_FMT_TIFF, &o, 0, "tif_lzw");
+    o.tiff_compress = 2; test_lossless(PC_FMT_TIFF, &o, 0, "tif_pb");
     o.tga_rle = 0; test_lossless(PC_FMT_TGA, &o, 1, "tga_raw");
     o.tga_rle = 1; test_lossless(PC_FMT_TGA, &o, 1, "tga_rle");
-    o.bmp_depth = 24; test_lossless(PC_FMT_BMP, &o, 0, "bmp24");
     pc_save_opts_default(&o);
-    o.save_alpha = 0; test_lossless(PC_FMT_PNG, &o, 0, "png_noalpha");
+    test_lossless(PC_FMT_BMP, &o, 0, "bmp");
     pc_save_opts_default(&o);
 
-    /* BMP 32-bit keeps alpha (RGB docs; gray always writes 8-bit) */
-    o.bmp_depth = 32;
-    d = mk_doc(37, 23, PC_MODE_RGB, 1, 0);
-    r = roundtrip(d, PC_FMT_BMP, &o, "bmp32.bmp");
-    if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); CHECK_EQ(r->s.layers[0]->is_background, 0); pc_doc_free(r); }
-    pc_doc_free(d);
-    pc_save_opts_default(&o);
+    /* BMP has no 32-bit output any more (the 1998 output rule) */
+    {
+        u8 *buf = NULL;
+        size_t n = 0;
+        char err[200] = "";
+        o.depth = 32;
+        d = mk_doc(37, 23, PC_MODE_RGB, 1, 0);
+        CHECK(pc_save_mem(d, PC_FMT_BMP, &o, &buf, &n, err, sizeof err) != 0);
+        CHECK(buf == NULL);
+        CHECK(strstr(err, "1998") != NULL);
+        pc_doc_free(d);
+        pc_save_opts_default(&o);
+    }
 
     /* TIFF LZW across table resets: a noisy 300x200 RGB image */
     {
@@ -234,10 +250,10 @@ static void test_formats(void)
         r = roundtrip(d, PC_FMT_PNG, &o, NULL);
         if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); pc_doc_free(r); }
         /* GIF of a noisy image: quantized, close on average */
-        o.gif_dither = 0;
+        o.q.dither = PC_DITHER_NONE;
         r = roundtrip(d, PC_FMT_GIF, &o, "noise.gif");
         if (r) { cmp_comp(d, r, &mean); CHECK(mean < 12); pc_doc_free(r); }
-        o.gif_dither = 1;
+        o.q.dither = PC_DITHER_DIFFUSION;
         r = roundtrip(d, PC_FMT_GIF, &o, "noise_dither.gif");
         if (r) { cmp_comp(d, r, &mean); CHECK(mean < 16); pc_doc_free(r); }
         pc_doc_free(d);
@@ -249,7 +265,7 @@ static void test_formats(void)
         int inter, alpha;
         for (inter = 0; inter < 2; inter++)
             for (alpha = 0; alpha < 3; alpha += 2) {
-                o.gif_interlace = inter;
+                o.interlace = inter;
                 d = mk_doc(37, 23, PC_MODE_RGB, alpha, 1);
                 r = roundtrip(d, PC_FMT_GIF, &o, inter ? "pal_inter.gif" : "pal.gif");
                 if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); pc_doc_free(r); }
@@ -322,7 +338,7 @@ static void test_formats(void)
         int w, h, c;
         unsigned char *px;
         d = mk_doc(37, 23, PC_MODE_RGB, 0, 0);
-        o.bmp_depth = 24;
+        o.depth = 24;
         CHECK_EQ(pc_save_mem(d, PC_FMT_BMP, &o, &buf, &n, err, sizeof err), 0);
         px = stbi_load_from_memory(buf, (int)n, &w, &h, &c, 4);
         CHECK(px != NULL);
@@ -1115,8 +1131,8 @@ static void test_fuzz(void)
         size_t n;
         pc_save_opts_default(&o);
         o.tiff_compress = cases[i].opt;
-        o.gif_interlace = cases[i].opt;
-        o.bmp_depth = cases[i].opt ? 32 : 24;
+        o.interlace = cases[i].opt;
+        o.depth = cases[i].fmt == PC_FMT_BMP ? (cases[i].opt ? 8 : 16) : cases[i].fmt == PC_FMT_TGA && cases[i].opt ? 8 : 0;
         o.tga_rle = cases[i].opt;
         if (pc_save_mem(cases[i].doc, cases[i].fmt, &o, &buf, &n, err, sizeof err)) { CHECK(0); continue; }
         fuzz_one(buf, n, cases[i].name, 2500);
@@ -1232,10 +1248,390 @@ static void test_external(void)
     fclose(lf);
 }
 
+/* ---------------- the 1998 output rule ---------------- */
+
+static PcDoc *save_load(const PcDoc *d, int fmt, const PcSaveOpts *o, u8 **file, size_t *filen, const char *dumpname)
+{
+    u8 *buf = NULL;
+    size_t n = 0;
+    char err[256] = "";
+    PcDoc *r;
+    int rc = pc_save_mem(d, fmt, o, &buf, &n, err, sizeof err);
+    CHECK_EQ(rc, 0);
+    if (rc) { fprintf(stderr, "save %s depth %d: %s\n", pc_format_name(fmt), o->depth, err); return NULL; }
+    if (dumpname) dump(dumpname, buf, n);
+    r = pc_load_mem(buf, n, fmt == PC_FMT_TGA ? "x.tga" : "noext", err, sizeof err);
+    CHECK(r != NULL);
+    if (!r) fprintf(stderr, "reload %s depth %d: %s\n", pc_format_name(fmt), o->depth, err);
+    if (file) { *file = buf; *filen = n; } else free(buf);
+    return r;
+}
+
+static int refuses(int fmt, int depth)
+{
+    PcSaveOpts o;
+    PcDoc *d = mk_doc(9, 7, PC_MODE_RGB, 1, 0);
+    u8 *buf = NULL;
+    size_t n = 0;
+    char err[256] = "";
+    int rc;
+    pc_save_opts_default(&o);
+    o.depth = depth;
+    rc = pc_save_mem(d, fmt, &o, &buf, &n, err, sizeof err);
+    free(buf);
+    pc_doc_free(d);
+    return rc != 0 && buf == NULL && strstr(err, "1998") != NULL;
+}
+
+/* Max channel difference between the doc's composite and r's, for pixels
+ * whose source alpha is opaque (alpha compared too when with_alpha). */
+static int max_diff_opaque(const PcDoc *a, const PcDoc *b, int with_alpha)
+{
+    PcBuf *ca = pc_doc_composite(a), *cb = pc_doc_composite(b);
+    size_t i, n = (size_t)a->s.w * a->s.h;
+    int k, m = 0;
+    for (i = 0; i < n; i++) {
+        if (!with_alpha && ca->px[i * 4 + 3] != 255) continue;
+        for (k = 0; k < (with_alpha ? 4 : 3); k++) m = PC_MAX(m, abs(ca->px[i * 4 + k] - cb->px[i * 4 + k]));
+    }
+    pc_buf_unref(ca); pc_buf_unref(cb);
+    return m;
+}
+
+static void test_1998_depths(void)
+{
+    PcSaveOpts o;
+    PcDoc *d, *r, *dg, *dpal, *dsm;
+    u8 *f = NULL;
+    size_t n = 0;
+    int dd[4], k;
+
+    /* the allowed table */
+    CHECK_EQ(pc_format_depths(PC_FMT_BMP, dd), 3); CHECK_EQ(dd[0], 8); CHECK_EQ(dd[1], 16); CHECK_EQ(dd[2], 24);
+    CHECK_EQ(pc_format_depths(PC_FMT_TGA, dd), 4); CHECK_EQ(dd[3], 32);
+    CHECK_EQ(pc_format_depths(PC_FMT_GIF, dd), 1); CHECK_EQ(dd[0], 8);
+    CHECK_EQ(pc_format_depths(PC_FMT_PNG, dd), 3); CHECK_EQ(dd[0], 8); CHECK_EQ(dd[1], 24); CHECK_EQ(dd[2], 32);
+    CHECK_EQ(pc_format_depths(PC_FMT_TIFF, dd), 2); CHECK_EQ(dd[0], 8); CHECK_EQ(dd[1], 24);
+    CHECK_EQ(pc_format_depths(PC_FMT_JPEG, dd), 2);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_BMP, 0, 1), 24);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_TGA, 0, 0), 24);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_TGA, 0, 1), 32);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_PNG, 0, 1), 32);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_PNG, 0, 0), 24);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_GIF, 0, 0), 8);
+    CHECK_EQ(pc_format_default_depth(PC_FMT_TIFF, 1, 0), 8);
+    /* everything else is refused by the writers, whoever asks */
+    CHECK(refuses(PC_FMT_BMP, 32)); CHECK(refuses(PC_FMT_BMP, 1)); CHECK(refuses(PC_FMT_BMP, 4));
+    CHECK(refuses(PC_FMT_PNG, 16)); CHECK(refuses(PC_FMT_PNG, 48)); CHECK(refuses(PC_FMT_PNG, 64));
+    CHECK(refuses(PC_FMT_GIF, 24)); CHECK(refuses(PC_FMT_TIFF, 32)); CHECK(refuses(PC_FMT_TIFF, 16));
+    CHECK(refuses(PC_FMT_TGA, 15)); CHECK(refuses(PC_FMT_TGA, 48)); CHECK(refuses(PC_FMT_JPEG, 32));
+    CHECK(refuses(PC_FMT_JPEG, 12)); CHECK(refuses(PC_FMT_PSD, 16)); CHECK(refuses(PC_FMT_PSD, 64));
+    {   /* the individual codecs check too */
+        PcDoc *t = mk_doc(4, 4, PC_MODE_RGB, 0, 0);
+        char err[200];
+        pc_save_opts_default(&o);
+        o.depth = 32;
+        CHECK(pc_bmp_save(t, &o, &f, &n, err, sizeof err) != 0);
+        o.depth = 16;
+        CHECK(pc_png_save(t, &o, &f, &n, err, sizeof err) != 0);
+        CHECK(pc_tiff_save(t, &o, &f, &n, err, sizeof err) != 0);
+        CHECK(pc_gif_save(t, &o, &f, &n, err, sizeof err) != 0);
+        CHECK(pc_jpeg_save(t, &o, &f, &n, err, sizeof err) != 0);
+        pc_doc_free(t);
+        f = NULL;
+    }
+
+    d = mk_doc(37, 23, PC_MODE_RGB, 0, 0);          /* thousands of colours */
+    dpal = mk_doc(37, 23, PC_MODE_RGB, 0, 1);       /* <= 216 colours */
+    dg = mk_doc(37, 23, PC_MODE_GRAY, 0, 0);
+    dsm = mk_smooth(64, 40, PC_MODE_RGB);
+
+    /* ---- BMP 8 / 16 (5-5-5, 5-6-5) / 24 ---- */
+    pc_save_opts_default(&o);
+    o.depth = 8;
+    r = save_load(dpal, PC_FMT_BMP, &o, &f, &n, "d8.bmp");
+    if (r) { CHECK_EQ(cmp_comp(dpal, r, NULL), 0); CHECK_EQ(get_u16le_t(f + 28), 8); pc_doc_free(r); }
+    free(f);
+    r = save_load(d, PC_FMT_BMP, &o, NULL, NULL, "d8_adaptive.bmp");
+    if (r) { double mean; cmp_comp(d, r, &mean); CHECK(mean < 8); if (!(mean < 8)) fprintf(stderr, "  bmp8 adaptive mean %.2f\n", mean); pc_doc_free(r); }
+    r = save_load(dg, PC_FMT_BMP, &o, NULL, NULL, NULL);       /* gray: 256-level gray palette, exact */
+    if (r) { CHECK_EQ(cmp_comp(dg, r, NULL), 0); CHECK_EQ(r->s.mode, PC_MODE_GRAY); pc_doc_free(r); }
+    o.depth = 16; o.q.dither = PC_DITHER_NONE;
+    for (k = 0; k < 2; k++) {
+        o.green6 = k;
+        r = save_load(d, PC_FMT_BMP, &o, &f, &n, k ? "d16_565.bmp" : "d16_555.bmp");
+        if (r) {
+            PcBuf *ca = pc_doc_composite(d), *cb = pc_doc_composite(r);
+            size_t i, bad = 0;
+            CHECK_EQ(get_u16le_t(f + 28), 16);
+            CHECK_EQ(get_u16le_t(f + 30), k ? 3 : 0);        /* BI_BITFIELDS / BI_RGB */
+            for (i = 0; i < 37 * 23; i++) {
+                const u8 *p = ca->px + i * 4, *q = cb->px + i * 4;
+                if (q[0] != pc_x5(pc_q5(p[0])) || q[2] != pc_x5(pc_q5(p[2]))) bad++;
+                if (q[1] != (k ? pc_x6(pc_q6(p[1])) : pc_x5(pc_q5(p[1])))) bad++;
+            }
+            CHECK_EQ(bad, 0);
+            pc_buf_unref(ca); pc_buf_unref(cb);
+            pc_doc_free(r);
+        }
+        free(f);
+    }
+    o.green6 = 0;
+    for (k = PC_DITHER_PATTERN; k <= PC_DITHER_DIFFUSION; k++) {
+        o.q.dither = k;
+        r = save_load(dsm, PC_FMT_BMP, &o, NULL, NULL, NULL);
+        if (r) { double mean; CHECK(max_diff_opaque(dsm, r, 0) <= 12); cmp_comp(dsm, r, &mean); CHECK(mean < 3); pc_doc_free(r); }
+    }
+    o.depth = 24;
+    r = save_load(d, PC_FMT_BMP, &o, NULL, NULL, NULL);
+    if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); pc_doc_free(r); }
+
+    /* ---- Targa 8 / 16 / 24 / 32, raw and RLE ---- */
+    for (k = 0; k < 2; k++) {
+        PcDoc *da = mk_doc(37, 23, PC_MODE_RGB, 2, 1);
+        pc_save_opts_default(&o);
+        o.tga_rle = k;
+        o.depth = 8;
+        r = save_load(dpal, PC_FMT_TGA, &o, &f, &n, k ? "d8_rle.tga" : "d8.tga");
+        if (r) { CHECK_EQ(cmp_comp(dpal, r, NULL), 0); CHECK_EQ(f[1], 1); CHECK_EQ(f[2], k ? 9 : 1); CHECK_EQ(f[16], 8); pc_doc_free(r); }
+        free(f);
+        r = save_load(dg, PC_FMT_TGA, &o, NULL, NULL, NULL);
+        if (r) { CHECK_EQ(cmp_comp(dg, r, NULL), 0); CHECK_EQ(r->s.mode, PC_MODE_GRAY); pc_doc_free(r); }
+        o.depth = 16; o.q.dither = PC_DITHER_NONE;
+        r = save_load(d, PC_FMT_TGA, &o, &f, &n, k ? "d16_rle.tga" : "d16.tga");
+        if (r) { CHECK(max_diff_opaque(d, r, 0) <= 5); CHECK_EQ(f[16], 16); pc_doc_free(r); }
+        free(f);
+        r = save_load(da, PC_FMT_TGA, &o, &f, &n, NULL);   /* A1R5G5B5: one alpha bit declared */
+        if (r) { CHECK_EQ(f[17] & 15, 1); pc_doc_free(r); }
+        free(f);
+        o.depth = 24;
+        r = save_load(d, PC_FMT_TGA, &o, NULL, NULL, NULL);
+        if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); pc_doc_free(r); }
+        o.depth = 32;
+        r = save_load(da, PC_FMT_TGA, &o, &f, &n, NULL);
+        if (r) { CHECK_EQ(cmp_comp(da, r, NULL), 0); CHECK_EQ(f[17] & 15, 8); pc_doc_free(r); }
+        free(f);
+        pc_doc_free(da);
+    }
+
+    /* ---- PNG 8 (+ tRNS) / 24 / 32 ---- */
+    pc_save_opts_default(&o);
+    o.depth = 8;
+    r = save_load(dpal, PC_FMT_PNG, &o, &f, &n, "d8.png");
+    if (r) { CHECK_EQ(cmp_comp(dpal, r, NULL), 0); CHECK_EQ(f[24], 8); CHECK_EQ(f[25], 3); pc_doc_free(r); }
+    free(f);
+    {
+        PcDoc *da = mk_doc(37, 23, PC_MODE_RGB, 2, 1);   /* binary alpha: one transparent entry */
+        r = save_load(da, PC_FMT_PNG, &o, &f, &n, "d8_trns.png");
+        if (r) { CHECK_EQ(cmp_comp(da, r, NULL), 0); CHECK(memmem_t(f, n, "tRNS") != 0); pc_doc_free(r); }
+        free(f);
+        o.q.transparency = 0;                            /* no transparency: matted, no tRNS */
+        r = save_load(da, PC_FMT_PNG, &o, &f, &n, NULL);
+        if (r) { PcDoc *m = matted(da); CHECK_EQ(cmp_comp(m, r, NULL), 0); CHECK(memmem_t(f, n, "tRNS") == 0); pc_doc_free(m); pc_doc_free(r); }
+        free(f);
+        o.q.transparency = 1;
+        pc_doc_free(da);
+    }
+    r = save_load(dg, PC_FMT_PNG, &o, NULL, NULL, NULL);
+    if (r) { CHECK_EQ(cmp_comp(dg, r, NULL), 0); CHECK_EQ(r->s.mode, PC_MODE_GRAY); pc_doc_free(r); }
+    o.depth = 24;
+    r = save_load(d, PC_FMT_PNG, &o, &f, &n, NULL);
+    if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); CHECK_EQ(f[24], 8); CHECK_EQ(f[25], 2); pc_doc_free(r); }
+    free(f);
+    {
+        /* the modern PNG exception: 32-bit RGBA keeps every alpha value exactly */
+        PcDoc *da = mk_doc(37, 23, PC_MODE_RGB, 1, 0), *dga = mk_doc(37, 23, PC_MODE_GRAY, 1, 0);
+        o.depth = 32;
+        r = save_load(da, PC_FMT_PNG, &o, &f, &n, "d32.png");
+        if (r) { CHECK_EQ(cmp_comp(da, r, NULL), 0); CHECK_EQ(f[24], 8); CHECK_EQ(f[25], 6); pc_doc_free(r); }
+        free(f);
+        o.depth = 0;                                     /* default with transparency = 32 */
+        r = save_load(da, PC_FMT_PNG, &o, &f, &n, NULL);
+        if (r) { CHECK_EQ(cmp_comp(da, r, NULL), 0); CHECK_EQ(f[25], 6); pc_doc_free(r); }
+        free(f);
+        o.depth = 32;                                    /* gray + alpha, 8 bits each */
+        r = save_load(dga, PC_FMT_PNG, &o, &f, &n, NULL);
+        if (r) { CHECK_EQ(cmp_comp(dga, r, NULL), 0); CHECK_EQ(f[25], 4); CHECK_EQ(r->s.mode, PC_MODE_GRAY); pc_doc_free(r); }
+        free(f);
+        /* PNG-8 with full alpha: partial alpha per palette entry (tRNS) */
+        o.depth = 8; o.q.full_alpha = 1;
+        for (k = 0; k < 2; k++) {
+            PcDoc *src = k ? da : mk_doc(37, 23, PC_MODE_RGB, 1, 1);
+            o.q.dither = k ? PC_DITHER_NONE : PC_DITHER_DIFFUSION;
+            r = save_load(src, PC_FMT_PNG, &o, &f, &n, k ? "d8_alpha_none.png" : "d8_alpha.png");
+            if (r) {
+                PcBuf *ca = pc_doc_composite(src), *cb = pc_doc_composite(r);
+                size_t i, np = 37 * 23, partial = 0, zero_bad = 0;
+                double asum = 0;
+                int amax = 0;
+                CHECK_EQ(f[25], 3);
+                CHECK(memmem_t(f, n, "tRNS") != 0);
+                for (i = 0; i < np; i++) {
+                    int a0 = ca->px[i * 4 + 3], a1 = cb->px[i * 4 + 3];
+                    if (a1 != 0 && a1 != 255) partial++;
+                    if ((a0 == 0) != (a1 == 0)) zero_bad++;
+                    asum += abs(a0 - a1); amax = PC_MAX(amax, abs(a0 - a1));
+                }
+                CHECK(partial > 0);
+                CHECK_EQ(zero_bad, 0);
+                CHECK(asum / np < (k ? 6 : 10));
+                if (k) CHECK(amax <= 48);                /* no dither: a box spans at most a few 16-level alpha cells */
+                if (!(asum / np < (k ? 6 : 10)) || (k && amax > 48)) fprintf(stderr, "  png8 alpha k%d mean %.2f max %d\n", k, asum / np, amax);
+                pc_buf_unref(ca); pc_buf_unref(cb);
+                pc_doc_free(r);
+            }
+            free(f);
+            if (!k) pc_doc_free(src);
+        }
+        {
+            /* few RGBA colours: exact, alpha included */
+            PcDoc *few = pc_doc_new(16, 16, PC_MODE_RGB, 72, 2, 0);
+            u8 *p = pc_layer_pixels_w(few->s.layers[0]);
+            int i;
+            for (i = 0; i < 256; i++) { p[i * 4] = (u8)(i & 0xF0); p[i * 4 + 1] = 40; p[i * 4 + 2] = 200; p[i * 4 + 3] = (u8)((i % 5) * 60); }
+            r = save_load(few, PC_FMT_PNG, &o, NULL, NULL, NULL);
+            if (r) { CHECK_EQ(cmp_comp(few, r, NULL), 0); pc_doc_free(r); }
+            pc_doc_free(few);
+        }
+        o.q.full_alpha = 0;
+        pc_doc_free(da); pc_doc_free(dga);
+    }
+
+    /* ---- TIFF 8 (palette colour) / 24 ---- */
+    for (k = 0; k < 3; k++) {
+        pc_save_opts_default(&o);
+        o.tiff_compress = k;
+        o.depth = 8;
+        r = save_load(dpal, PC_FMT_TIFF, &o, NULL, NULL, k == 1 ? "d8_lzw.tif" : NULL);
+        if (r) { CHECK_EQ(cmp_comp(dpal, r, NULL), 0); pc_doc_free(r); }
+        r = save_load(dg, PC_FMT_TIFF, &o, NULL, NULL, NULL);
+        if (r) { CHECK_EQ(cmp_comp(dg, r, NULL), 0); CHECK_EQ(r->s.mode, PC_MODE_GRAY); pc_doc_free(r); }
+        o.depth = 24;
+        r = save_load(d, PC_FMT_TIFF, &o, NULL, NULL, NULL);
+        if (r) { CHECK_EQ(cmp_comp(d, r, NULL), 0); pc_doc_free(r); }
+    }
+
+    /* ---- GIF through the shared quantizer: fixed palettes stay in palette ---- */
+    for (k = PC_PAL_EXACT; k < PC_PAL_DOCUMENT; k++) {
+        u8 pal[768];
+        int np = pc_palette_builtin(k, 256, pal);
+        pc_save_opts_default(&o);
+        o.q.palette = k;
+        o.q.dither = PC_DITHER_PATTERN;
+        r = save_load(d, PC_FMT_GIF, &o, NULL, NULL, NULL);
+        if (r && np) {
+            PcBuf *cb = pc_doc_composite(r);
+            size_t i;
+            int bad = 0, j;
+            for (i = 0; i < 37 * 23; i++) {
+                const u8 *q = cb->px + i * 4;
+                for (j = 0; j < np; j++) if (pal[j * 3] == q[0] && pal[j * 3 + 1] == q[1] && pal[j * 3 + 2] == q[2]) break;
+                if (j == np) bad++;
+            }
+            CHECK_EQ(bad, 0);
+            pc_buf_unref(cb);
+        }
+        if (r) pc_doc_free(r);
+    }
+
+    /* ---- JPEG: baseline only, 4:2:0, depth 8 = grayscale ---- */
+    pc_save_opts_default(&o);
+    o.depth = 24;
+    o.jpeg_quality = 12;
+    r = save_load(dsm, PC_FMT_JPEG, &o, &f, &n, NULL);
+    if (r) {
+        size_t i;
+        int sof0 = 0, sof2 = 0;
+        for (i = 0; i + 1 < n; i++) { if (f[i] == 0xFF && f[i + 1] == 0xC0) sof0 = (int)i; if (f[i] == 0xFF && f[i + 1] == 0xC2) sof2 = 1; }
+        CHECK(sof0 > 0); CHECK_EQ(sof2, 0);
+        if (sof0) CHECK_EQ(f[sof0 + 11], 0x22);         /* luma sampled 2x2: 4:2:0 even at maximum quality */
+        pc_doc_free(r);
+    }
+    free(f);
+    o.depth = 8;
+    r = save_load(dsm, PC_FMT_JPEG, &o, NULL, NULL, NULL);
+    if (r) { CHECK_EQ(r->s.mode, PC_MODE_GRAY); pc_doc_free(r); }
+
+    /* ---- colour key: transparent pixels become magenta, reserved in the palette ---- */
+    {
+        PcDoc *da = mk_doc(37, 23, PC_MODE_RGB, 2, 0);
+        PcBuf *ca = pc_doc_composite(da);
+        static const int fmts[][2] = { { PC_FMT_BMP, 8 }, { PC_FMT_BMP, 16 }, { PC_FMT_BMP, 24 }, { PC_FMT_TGA, 8 }, { PC_FMT_TIFF, 8 }, { PC_FMT_PNG, 24 } };
+        unsigned fi;
+        for (fi = 0; fi < sizeof fmts / sizeof fmts[0]; fi++) {
+            pc_save_opts_default(&o);
+            o.depth = fmts[fi][1];
+            o.q.colorkey = 1;
+            o.q.transparency = 0;
+            r = save_load(da, fmts[fi][0], &o, NULL, NULL, NULL);
+            if (r) {
+                PcBuf *cb = pc_doc_composite(r);
+                size_t i, bad = 0;
+                for (i = 0; i < 37 * 23; i++) {
+                    const u8 *p = ca->px + i * 4, *q = cb->px + i * 4;
+                    int key = q[0] == 255 && q[1] == 0 && q[2] == 255;
+                    if ((p[3] == 0) != key) bad++;           /* key exactly where transparent, nowhere else */
+                }
+                CHECK_EQ(bad, 0);
+                if (bad) fprintf(stderr, "  colour key %s %d: %d bad\n", pc_format_name(fmts[fi][0]), fmts[fi][1], (int)bad);
+                pc_buf_unref(cb);
+                pc_doc_free(r);
+            }
+        }
+        pc_buf_unref(ca);
+        pc_doc_free(da);
+    }
+
+    /* ---- Indexed Color mode: the document palette is reused exactly ---- */
+    {
+        PcDoc *di = mk_doc(37, 23, PC_MODE_RGB, 0, 0);
+        PcQuantOpts q;
+        pc_quant_defaults(&q);
+        q.palette = PC_PAL_ADAPTIVE; q.colors = 32;
+        CHECK_EQ(pc_doc_to_indexed(di, &q), 0);
+        CHECK(di->index_ncolors > 0 && di->index_ncolors <= 32);
+        CHECK_EQ(pc_count_colors(di->s.layers[0]->pix->px, 37 * 23, 256) <= 32, 1);
+        pc_save_opts_default(&o);
+        o.depth = 8;
+        o.q.palette = PC_PAL_DOCUMENT;
+        r = save_load(di, PC_FMT_BMP, &o, &f, &n, NULL);
+        if (r) {
+            CHECK_EQ(cmp_comp(di, r, NULL), 0);
+            CHECK_EQ(get_u32le_t(f + 46), (unsigned)di->index_ncolors);      /* biClrUsed */
+            CHECK_EQ(f[54], di->index_pal[2]); CHECK_EQ(f[55], di->index_pal[1]); CHECK_EQ(f[56], di->index_pal[0]);
+            /* the reopened 8-bit BMP remembers its colour table */
+            CHECK_EQ(r->index_ncolors, di->index_ncolors);
+            pc_doc_free(r);
+        }
+        free(f);
+        pc_doc_free(di);
+    }
+
+    /* ---- the save preview is what the writer stores ---- */
+    {
+        char err[128];
+        PcBuf *pv;
+        pc_save_opts_default(&o);
+        o.depth = 16;
+        o.q.dither = PC_DITHER_DIFFUSION;
+        pv = pc_save_preview(d, PC_FMT_BMP, &o, err, sizeof err);
+        r = save_load(d, PC_FMT_BMP, &o, NULL, NULL, NULL);
+        CHECK(pv != NULL);
+        if (pv && r) { PcBuf *cb = pc_doc_composite(r); CHECK(!memcmp(pv->px, cb->px, 37 * 23 * 4)); pc_buf_unref(cb); }
+        if (r) pc_doc_free(r);
+        pc_buf_unref(pv);
+        o.depth = 32;
+        CHECK(pc_save_preview(d, PC_FMT_BMP, &o, err, sizeof err) == NULL);
+    }
+
+    pc_doc_free(d); pc_doc_free(dpal); pc_doc_free(dg); pc_doc_free(dsm);
+}
+
 int test_io(void)
 {
     test_detect();
     test_formats();
+    test_1998_depths();
     test_psd_roundtrip();
     test_psd_handbuilt();
     test_tiff_handbuilt();

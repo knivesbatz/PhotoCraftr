@@ -1,6 +1,9 @@
 /*
  * PNG: decoding by stb_image (8/16-bit, palette, gray, alpha; 16-bit is
- * reduced to 8), encoding by stb_image_write.  The resolution travels in
+ * reduced to 8).  Encoding at the 1998 depths only: 8-bit palette (our
+ * own PLTE/tRNS writer, zlib from stb_image_write) or 8-bit gray, 24-bit
+ * RGB and 32-bit RGBA (gray + alpha for Grayscale documents) through
+ * stb_image_write - never 16 bits per channel.  The resolution travels in
  * a pHYs chunk, which we parse and insert ourselves.
  */
 #include "io/ioint.h"
@@ -56,26 +59,70 @@ static u8 *pack(const u8 *rgba, size_t np, int ch)
     return o;
 }
 
+static void png_chunk(PcWr *w, const char *type, const u8 *body, size_t len)
+{
+    size_t at;
+    wr_u32be(w, (u32)len);
+    at = w->n;
+    wr_bytes(w, type, 4);
+    if (len) wr_bytes(w, body, len);
+    wr_u32be(w, w->err ? 0 : pcio_crc32(0, w->p + at, len + 4));
+}
+
+/* 8-bit colour-indexed PNG: IHDR, PLTE, tRNS (when any palette entry is
+ * not opaque: one transparent entry, or partial alpha per entry - the
+ * modern PNG-8 exception), one IDAT of unfiltered rows, IEND. */
+static int png_write_indexed(PcWr *w, const PcIndexed *ix)
+{
+    u8 ihdr[13], *raw, *z;
+    size_t rb = (size_t)ix->w + 1, zn, y;
+    int i, ntrns = 0;
+    raw = (u8 *)pc_alloc_checked(rb, (size_t)ix->h, 1, 0);
+    if (!raw) return -1;
+    for (y = 0; y < (size_t)ix->h; y++) {
+        raw[y * rb] = 0;                                  /* filter: none (the usual choice for palettes) */
+        memcpy(raw + y * rb + 1, ix->idx + y * ix->w, (size_t)ix->w);
+    }
+    z = pcio_zlib_compress(raw, rb * ix->h, &zn);
+    free(raw);
+    if (!z) return -1;
+    wr_bytes(w, png_sig, 8);
+    ihdr[0] = (u8)(ix->w >> 24); ihdr[1] = (u8)(ix->w >> 16); ihdr[2] = (u8)(ix->w >> 8); ihdr[3] = (u8)ix->w;
+    ihdr[4] = (u8)(ix->h >> 24); ihdr[5] = (u8)(ix->h >> 16); ihdr[6] = (u8)(ix->h >> 8); ihdr[7] = (u8)ix->h;
+    ihdr[8] = 8; ihdr[9] = 3; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+    png_chunk(w, "IHDR", ihdr, 13);
+    png_chunk(w, "PLTE", ix->pal, (size_t)ix->ncolors * 3);
+    for (i = 0; i < ix->ncolors; i++) if (ix->alpha[i] != 255) ntrns = i + 1;
+    if (ntrns) png_chunk(w, "tRNS", ix->alpha, (size_t)ntrns);
+    png_chunk(w, "IDAT", z, zn);
+    png_chunk(w, "IEND", NULL, 0);
+    free(z);
+    return w->err ? -1 : 0;
+}
+
 int pc_png_save(const PcDoc *d, const PcSaveOpts *o, u8 **out, size_t *outn, char *err, size_t errn)
 {
-    PcBuf *c;
+    PcFlat f;
     size_t np;
-    int alpha, ch, rc;
+    int ch, rc;
     u8 *px;
     PcWr w;
     memset(&w, 0, sizeof w);
     *out = NULL; *outn = 0;
-    c = pcio_composite(d, err, errn);
-    if (!c) return -1;
-    np = (size_t)c->w * c->h;
-    alpha = (!o || o->save_alpha) && pcio_has_alpha(c->px, np);
-    if (!alpha) pcio_matte_white(c->px, np);
-    ch = d->s.mode == PC_MODE_GRAY ? (alpha ? 2 : 1) : (alpha ? 4 : 3);
-    px = pack(c->px, np, ch);
-    if (!px) { pc_buf_unref(c); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
-    rc = pcio_stbi_write_png(&w, c->w, c->h, ch, px);
-    free(px);
-    pc_buf_unref(c);
+    if (pcio_flat(d, PC_FMT_PNG, o, &f, err, errn)) return -1;
+    np = (size_t)f.c->w * f.c->h;
+    if (f.ix.idx) {
+        rc = png_write_indexed(&w, &f.ix);
+    } else {
+        /* 8: gray; 24: RGB; 32: RGBA (gray + alpha for Grayscale documents) */
+        int gray = d->s.mode == PC_MODE_GRAY;
+        ch = f.depth == 8 ? 1 : f.depth == 24 ? 3 : gray ? 2 : 4;
+        px = pack(f.c->px, np, ch);
+        if (!px) { pcio_flat_free(&f); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
+        rc = pcio_stbi_write_png(&w, f.c->w, f.c->h, ch, px);
+        free(px);
+    }
+    pcio_flat_free(&f);
     if (rc || w.n < 33 || memcmp(w.p + 12, "IHDR", 4)) {
         wr_free(&w);
         pcio_seterr(err, errn, "The PNG file could not be written.");

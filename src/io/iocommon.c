@@ -334,3 +334,114 @@ size_t pcio_ansi_to_utf16(const char *s, u16 *out, size_t outmax)
     }
     return o;
 }
+
+/* ---------------- the 1998 output rule ---------------- */
+
+int pcio_check_depth(int fmt, int depth, char *err, size_t errn)
+{
+    int dd[4], n, i;
+    char list[32] = "";
+    if (pc_format_depth_ok(fmt, depth)) return 0;
+    n = pc_format_depths(fmt, dd);
+    for (i = 0; i < n; i++) {
+        char one[8];
+        pc_snprintf(one, sizeof one, "%s%d", i == 0 ? "" : i == n - 1 ? " or " : ", ", dd[i]);
+        pc_strlcat(list, one, sizeof list);
+    }
+    pcio_seterr(err, errn, "%s files can only be saved at %s bits per pixel (1998 output rules), not %d.",
+                pc_format_ext(fmt)[0] ? pc_format_name(fmt) : "These", list, depth);
+    return -1;
+}
+
+/* Transparent pixels (alpha < 128) to the colour key when it is on, the
+ * rest matted on white; alpha 255 afterwards.  mask (optional) records
+ * which pixels were transparent. */
+static void flatten_key(u8 *px, size_t np, int key_on, u32 key, u8 *mask)
+{
+    size_t i;
+    for (i = 0; i < np; i++, px += 4) {
+        int t = px[3] < 128;
+        if (mask) mask[i] = (u8)t;
+        if (t && key_on) { px[0] = (u8)pc_r(key); px[1] = (u8)pc_g(key); px[2] = (u8)pc_b(key); px[3] = 255; continue; }
+        if (px[3] != 255) {
+            int a = px[3], k;
+            for (k = 0; k < 3; k++) px[k] = (u8)((px[k] * a + 255 * (255 - a) + 127) / 255);
+            px[3] = 255;
+        }
+    }
+}
+
+int pcio_flat(const PcDoc *d, int fmt, const PcSaveOpts *o, PcFlat *f, char *err, size_t errn)
+{
+    PcSaveOpts def;
+    size_t np, i;
+    int gray = d->s.mode == PC_MODE_GRAY, any_t = 0, key_on;
+    u32 key;
+    memset(f, 0, sizeof *f);
+    f->ix.transparent = -1;
+    if (!o) { pc_save_opts_default(&def); o = &def; }
+    if (pcio_check_depth(fmt, o->depth, err, errn)) return -1;
+    f->c = pcio_composite(d, err, errn);
+    if (!f->c) return -1;
+    np = (size_t)f->c->w * f->c->h;
+    for (i = 0; i < np; i++) if (f->c->px[i * 4 + 3] < 128) { any_t = 1; break; }
+    f->depth = o->depth ? o->depth : pc_format_default_depth(fmt, gray, pcio_has_alpha(f->c->px, np));
+    key_on = o->q.colorkey;
+    key = o->q.key_rgb & 0xFFFFFF;
+    switch (f->depth) {
+    case 32:
+        f->alpha = 1;
+        return 0;
+    case 24:
+        flatten_key(f->c->px, np, key_on, key, NULL);
+        return 0;
+    case 16: {
+        u8 *mask = (u8 *)pc_alloc_checked(np, 1, 1, 0);
+        int keep_a = fmt == PC_FMT_TGA && o->q.transparency;
+        int green6 = fmt == PC_FMT_BMP && o->green6;
+        if (!mask) { pcio_flat_free(f); pcio_seterr(err, errn, "Not enough memory to save the file."); return -1; }
+        flatten_key(f->c->px, np, key_on, key, mask);
+        pc_hicolor_reduce(f->c->px, f->c->w, f->c->h, green6, o->q.dither);
+        for (i = 0; i < np; i++) {
+            u8 *p = f->c->px + i * 4;
+            if (!mask[i]) continue;
+            if (key_on) {           /* the key stays exact (no dither noise on it) */
+                p[0] = (u8)pc_x5(pc_q5(pc_r(key)));
+                p[1] = (u8)(green6 ? pc_x6(pc_q6(pc_g(key))) : pc_x5(pc_q5(pc_g(key))));
+                p[2] = (u8)pc_x5(pc_q5(pc_b(key)));
+            }
+            if (keep_a) p[3] = 0;
+        }
+        free(mask);
+        f->alpha = keep_a;
+        return 0;
+    }
+    default: {           /* 8 */
+        PcQuantOpts q = o->q;
+        /* only GIF and PNG have a transparent palette index; partial alpha per
+         * palette entry is the modern PNG exception */
+        q.transparency = q.transparency && (fmt == PC_FMT_GIF || fmt == PC_FMT_PNG);
+        q.full_alpha = q.full_alpha && q.transparency && fmt == PC_FMT_PNG;
+        if (q.full_alpha) any_t = pcio_has_alpha(f->c->px, np);
+        if (gray && !(any_t && (q.transparency || q.colorkey))) {
+            flatten_key(f->c->px, np, 0, 0, NULL);
+            f->gray = 1;
+            return 0;
+        }
+        if (pc_quantize(f->c->px, f->c->w, f->c->h, &q, d->index_ncolors ? d->index_pal : NULL, d->index_ncolors,
+                        d->index_transparent, &f->ix)) {
+            pcio_flat_free(f);
+            pcio_seterr(err, errn, "Not enough memory to save the file.");
+            return -1;
+        }
+        return 0;
+    }
+    }
+}
+
+void pcio_flat_free(PcFlat *f)
+{
+    pc_buf_unref(f->c);
+    f->c = NULL;
+    pc_indexed_free(&f->ix);
+}

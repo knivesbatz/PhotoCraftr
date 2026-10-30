@@ -111,11 +111,14 @@ int pcio_stbi_write_png(PcWr *w, int width, int height, int comp, const u8 *px)
     return w->err ? -1 : 0;
 }
 
-int pcio_stbi_write_tga(PcWr *w, int width, int height, int comp, const u8 *px, int rle)
+u8 *pcio_zlib_compress(const u8 *data, size_t n, size_t *outn)
 {
-    int ok;
-    stbi_write_tga_with_rle = rle ? 1 : 0;
-    ok = stbi_write_tga_to_func(wr_func, w, width, height, comp, px);
-    stbi_write_tga_with_rle = 1;
-    return (!ok || w->err) ? -1 : 0;
+    int len = 0;
+    u8 *z;
+    *outn = 0;
+    if (n > (size_t)INT_MAX / 2) return NULL;
+    z = stbi_zlib_compress((unsigned char *)data, (int)n, &len, 8);
+    if (!z) return NULL;
+    *outn = (size_t)len;
+    return z;
 }

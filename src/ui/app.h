@@ -224,6 +224,13 @@ int reg_get_str(const char *sub, const char *name, char *out, int n);
 void reg_set_str(const char *sub, const char *name, const char *v);
 int reg_get_bin(const char *sub, const char *name, void *out, int n);
 void reg_set_bin(const char *sub, const char *name, const void *v, int n);
+/* Last save options per format (and per document kind: 0 opaque RGB, 1 with
+ * transparency, 2 Grayscale), and the last Indexed Color settings. */
+int save_opts_kind(const PcDoc *d);
+void settings_load_save_opts(int fmt, int kind, PcSaveOpts *o);
+void settings_store_save_opts(int fmt, int kind, const PcSaveOpts *o);
+void settings_load_indexed(PcQuantOpts *q);
+void settings_store_indexed(const PcQuantOpts *q);
 
 /* platform.c */
 int plat_read_file(const char *path, u8 **data, size_t *n, char *err, size_t errn);
@@ -350,7 +357,8 @@ int dlg_histogram(PcDoc *d);
 int dlg_about(void);
 int dlg_open_file(char *path, int n);
 int dlg_save_file(char *path, int n, int *fmt, int layered_ok);
-int dlg_format_options(int fmt, PcSaveOpts *o);
+int dlg_format_options(const PcDoc *d, int fmt, PcSaveOpts *o);   /* "<Format> Options", 1998 depths only */
+int dlg_indexed_color(PcDoc *d, PcQuantOpts *q);                   /* Image > Mode > Indexed Color */
 int dlg_text_input(const char *title, const char *label, char *buf, int n);
 int dlg_message(const char *title, const char *text, int icon, int buttons);  /* buttons: 0 OK, 1 OK/Cancel, 2 Yes/No/Cancel */
 int dlg_duplicate(char *name, int n, int merged_option, int *merged);
