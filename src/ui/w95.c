@@ -930,6 +930,8 @@ void w95_tooltip_show(HWND owner, int sx, int sy, const char *text)
     dc = GetDC(g_tip);
     w = w95_text_width(dc, W95_FONT_NORMAL, text) + 7;
     ReleaseDC(g_tip, dc);
+    /* Keep it on screen (panels sit at the right edge). */
+    if (sx + w > GetSystemMetrics(SM_CXSCREEN)) sx = PC_MAX(0, GetSystemMetrics(SM_CXSCREEN) - w);
     SetWindowPos(g_tip, HWND_TOPMOST, sx, sy, w, 17, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(g_tip, NULL, FALSE);
 }

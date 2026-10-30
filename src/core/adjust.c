@@ -1,7 +1,10 @@
 /*
  * Image > Adjust: Levels, Curves, Brightness/Contrast, Color Balance,
  * Hue/Saturation, Invert, Equalize, Threshold, Posterize, Desaturate,
- * Channel Mixer, Auto Levels, histogram.
+ * Channel Mixer, Auto Levels, histogram.  The nine types that adjustment
+ * layers offer go through one prepared form (PcAdjPrep: lookup tables or a
+ * per-pixel function) shared by the destructive commands and the compositor,
+ * so an adjustment layer renders exactly what Image > Adjust would write.
  *
  * Color Balance is ported from PhotoCraft crates/compose/src/adjust/color.rs
  * (BalanceCurve, MIT OR Apache-2.0), which was reverse-engineered against
@@ -18,7 +21,7 @@ static int adjust_pixels(PcDoc *d, PixFn fn, void *ctx)
     size_t i, n = (size_t)d->s.w * d->s.h;
     u8 *res;
     int rc;
-    if (!l || l->lock_pixels) return -1;
+    if (!l || l->lock_pixels || !l->pix) return -1;
     res = (u8 *)pc_alloc_checked(n, 4, 1, 0);
     if (!res) return -1;
     memcpy(res, l->pix->px, n * 4);
@@ -72,9 +75,10 @@ void pc_levels_lut(const PcLevels *lv, u8 lut[3][256])
 
 int pc_adj_levels(PcDoc *d, const PcLevels *lv)
 {
-    u8 lut[3][256];
-    pc_levels_lut(lv, lut);
-    return pc_adj_luts(d, lut);
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_LEVELS);
+    a.levels = *lv;
+    return pc_adjust_apply(d, &a);
 }
 
 void pc_histogram(const PcDoc *d, int channel, int use_composite, unsigned hist[256])
@@ -84,7 +88,11 @@ void pc_histogram(const PcDoc *d, int channel, int use_composite, unsigned hist[
     size_t i, n = (size_t)d->s.w * d->s.h;
     memset(hist, 0, sizeof(unsigned) * 256);
     if (use_composite) b = pc_doc_composite(d);
-    else if (d->s.active >= 0 && d->s.active < d->s.nlayers) b = pc_buf_ref(d->s.layers[d->s.active]->pix);
+    else if (d->s.active >= 0 && d->s.active < d->s.nlayers) {
+        const PcLayer *l = d->s.layers[d->s.active];
+        /* An adjustment layer sees the picture below it. */
+        b = l->pix ? pc_buf_ref(l->pix) : pc_doc_composite_below(d, d->s.active);
+    }
     if (!b) return;
     p = b->px;
     for (i = 0; i < n; i++, p += 4) {
@@ -170,23 +178,29 @@ void pc_curve_lut(const PcCurve *c, u8 lut[256])
     }
 }
 
-int pc_adj_curves(PcDoc *d, const PcCurves *cv)
+static void curves_luts(const PcCurves *cv, u8 lut[3][256])
 {
-    u8 master[256], ch[256], lut[3][256];
+    u8 master[256], ch[256];
     int c, v;
     pc_curve_lut(&cv->c[0], master);
     for (c = 0; c < 3; c++) {
         pc_curve_lut(&cv->c[c + 1], ch);
         for (v = 0; v < 256; v++) lut[c][v] = master[ch[v]];
     }
-    return pc_adj_luts(d, lut);
+}
+
+int pc_adj_curves(PcDoc *d, const PcCurves *cv)
+{
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_CURVES);
+    a.curves = *cv;
+    return pc_adjust_apply(d, &a);
 }
 
 /* ---------------- Brightness/Contrast (PS 5.0 linear behaviour) ---------------- */
 
-int pc_adj_brightness_contrast(PcDoc *d, int brightness, int contrast)
+static void bc_luts(int brightness, int contrast, u8 lut[3][256])
 {
-    u8 lut[3][256];
     double f;
     int v, c;
     brightness = PC_CLAMP(brightness, -100, 100);
@@ -197,7 +211,14 @@ int pc_adj_brightness_contrast(PcDoc *d, int brightness, int contrast)
         int iv = (int)floor(o + 0.5);
         for (c = 0; c < 3; c++) lut[c][v] = (u8)PC_CLAMP(iv, 0, 255);
     }
-    return pc_adj_luts(d, lut);
+}
+
+int pc_adj_brightness_contrast(PcDoc *d, int brightness, int contrast)
+{
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_BRIGHTNESS_CONTRAST);
+    a.brightness = brightness; a.contrast = contrast;
+    return pc_adjust_apply(d, &a);
 }
 
 /* ---------------- Color Balance (PhotoCraft BalanceCurve port) ---------------- */
@@ -217,9 +238,8 @@ static double balance_eval(double b, double w, double e, int knee, double u0, do
     return pow(u, e);
 }
 
-int pc_adj_color_balance(PcDoc *d, const PcColorBalance *cb)
+static void balance_luts(const PcColorBalance *cb, u8 lut[3][256])
 {
-    u8 lut[3][256];
     int ch, v, t;
     double tones[3][3];
     for (t = 0; t < 3; t++) for (ch = 0; ch < 3; ch++) tones[t][ch] = PC_CLAMP(cb->v[t][ch], -100, 100);
@@ -252,7 +272,14 @@ int pc_adj_color_balance(PcDoc *d, const PcColorBalance *cb)
             lut[ch][v] = (u8)PC_CLAMP((int)(o * 255 + 0.5), 0, 255);
         }
     }
-    return pc_adj_luts(d, lut);
+}
+
+int pc_adj_color_balance(PcDoc *d, const PcColorBalance *cb)
+{
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_COLOR_BALANCE);
+    a.balance = *cb;
+    return pc_adjust_apply(d, &a);
 }
 
 /* ---------------- Hue/Saturation ---------------- */
@@ -297,16 +324,21 @@ static void huesat_fn(u8 *p, void *ctx)
     p[0] = (u8)PC_CLAMP(r, 0, 255); p[1] = (u8)PC_CLAMP(g, 0, 255); p[2] = (u8)PC_CLAMP(b, 0, 255);
 }
 
-int pc_adj_hue_sat(PcDoc *d, const PcHueSat *hs) { return adjust_pixels(d, huesat_fn, (void *)hs); }
+int pc_adj_hue_sat(PcDoc *d, const PcHueSat *hs)
+{
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_HUE_SAT);
+    a.huesat = *hs;
+    return pc_adjust_apply(d, &a);
+}
 
 /* ---------------- simple adjustments ---------------- */
 
 int pc_adj_invert(PcDoc *d)
 {
-    u8 lut[3][256];
-    int v;
-    for (v = 0; v < 256; v++) lut[0][v] = lut[1][v] = lut[2][v] = (u8)(255 - v);
-    return pc_adj_luts(d, lut);
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_INVERT);
+    return pc_adjust_apply(d, &a);
 }
 
 static void desat_fn(u8 *p, void *ctx)
@@ -345,11 +377,16 @@ static void threshold_fn(u8 *p, void *ctx)
     p[0] = p[1] = p[2] = v;
 }
 
-int pc_adj_threshold(PcDoc *d, int level) { level = PC_CLAMP(level, 1, 255); return adjust_pixels(d, threshold_fn, &level); }
-
-int pc_adj_posterize(PcDoc *d, int levels)
+int pc_adj_threshold(PcDoc *d, int level)
 {
-    u8 lut[3][256];
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_THRESHOLD);
+    a.threshold = level;
+    return pc_adjust_apply(d, &a);
+}
+
+static void posterize_luts(int levels, u8 lut[3][256])
+{
     int v;
     levels = PC_CLAMP(levels, 2, 255);
     for (v = 0; v < 256; v++) {
@@ -357,27 +394,98 @@ int pc_adj_posterize(PcDoc *d, int levels)
         int o = q * 255 / (levels - 1);
         lut[0][v] = lut[1][v] = lut[2][v] = (u8)PC_CLAMP(o, 0, 255);
     }
-    return pc_adj_luts(d, lut);
 }
 
-typedef struct { int m[3][4]; int mono; } MixCtx;
-
-static void mixer_fn(u8 *p, void *ctx)
+int pc_adj_posterize(PcDoc *d, int levels)
 {
-    const MixCtx *c = (const MixCtx *)ctx;
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_POSTERIZE);
+    a.posterize = levels;
+    return pc_adjust_apply(d, &a);
+}
+
+static void mixer_px(const PcAdjust *a, u8 *p)
+{
     int o[3], k;
     for (k = 0; k < 3; k++) {
-        int v = (p[0] * c->m[k][0] + p[1] * c->m[k][1] + p[2] * c->m[k][2]) / 100 + c->m[k][3] * 255 / 100;
+        const int *m = a->mixer[k];
+        int v = (p[0] * m[0] + p[1] * m[1] + p[2] * m[2]) / 100 + m[3] * 255 / 100;
         o[k] = PC_CLAMP(v, 0, 255);
     }
-    if (c->mono) o[1] = o[2] = o[0];
+    if (a->mixer_mono) o[1] = o[2] = o[0];
     p[0] = (u8)o[0]; p[1] = (u8)o[1]; p[2] = (u8)o[2];
 }
 
 int pc_adj_channel_mixer(PcDoc *d, const int m[3][4], int monochrome)
 {
-    MixCtx c;
-    memcpy(c.m, m, sizeof c.m);
-    c.mono = monochrome;
-    return adjust_pixels(d, mixer_fn, &c);
+    PcAdjust a;
+    pc_adjust_default(&a, PC_ADJ_CHANNEL_MIXER);
+    memcpy(a.mixer, m, sizeof a.mixer);
+    a.mixer_mono = monochrome;
+    return pc_adjust_apply(d, &a);
+}
+
+/* ---------------- adjustment layers: shared prepared form ---------------- */
+
+const char *pc_adjust_name(int type)
+{
+    static const char *const names[PC_ADJ_COUNT] = {
+        "Brightness/Contrast", "Levels", "Curves", "Color Balance", "Hue/Saturation",
+        "Channel Mixer", "Invert", "Threshold", "Posterize"
+    };
+    return type >= 0 && type < PC_ADJ_COUNT ? names[type] : "Adjustment";
+}
+
+void pc_adjust_default(PcAdjust *a, int type)
+{
+    int k;
+    memset(a, 0, sizeof *a);
+    a->type = PC_CLAMP(type, 0, PC_ADJ_COUNT - 1);
+    pc_levels_default(&a->levels);
+    pc_curves_default(&a->curves);
+    a->balance.preserve_luminosity = 1;
+    for (k = 0; k < 3; k++) a->mixer[k][k] = 100;
+    a->threshold = 128;
+    a->posterize = 4;
+}
+
+void pc_adjust_prepare(const PcAdjust *a, PcAdjPrep *p)
+{
+    int v;
+    p->a = *a;
+    p->type = a->type;
+    p->use_lut = 1;
+    switch (a->type) {
+    case PC_ADJ_BRIGHTNESS_CONTRAST: bc_luts(a->brightness, a->contrast, p->lut); break;
+    case PC_ADJ_LEVELS: pc_levels_lut(&a->levels, p->lut); break;
+    case PC_ADJ_CURVES: curves_luts(&a->curves, p->lut); break;
+    case PC_ADJ_COLOR_BALANCE: balance_luts(&a->balance, p->lut); break;
+    case PC_ADJ_INVERT: for (v = 0; v < 256; v++) p->lut[0][v] = p->lut[1][v] = p->lut[2][v] = (u8)(255 - v); break;
+    case PC_ADJ_POSTERIZE: posterize_luts(a->posterize, p->lut); break;
+    case PC_ADJ_THRESHOLD: p->a.threshold = PC_CLAMP(a->threshold, 1, 255); p->use_lut = 0; break;
+    default: p->use_lut = 0; break;          /* Hue/Saturation, Channel Mixer */
+    }
+}
+
+void pc_adjust_pixel(const PcAdjPrep *p, u8 *px)
+{
+    if (p->use_lut) { px[0] = p->lut[0][px[0]]; px[1] = p->lut[1][px[1]]; px[2] = p->lut[2][px[2]]; return; }
+    switch (p->type) {
+    case PC_ADJ_HUE_SAT: huesat_fn(px, (void *)&p->a.huesat); break;
+    case PC_ADJ_THRESHOLD: threshold_fn(px, (void *)&p->a.threshold); break;
+    case PC_ADJ_CHANNEL_MIXER: mixer_px(&p->a, px); break;
+    }
+}
+
+static void prep_fn(u8 *px, void *ctx) { pc_adjust_pixel((const PcAdjPrep *)ctx, px); }
+
+int pc_adjust_apply(PcDoc *d, const PcAdjust *a)
+{
+    PcAdjPrep *p = (PcAdjPrep *)malloc(sizeof *p);
+    int rc;
+    if (!p) return -1;
+    pc_adjust_prepare(a, p);
+    rc = adjust_pixels(d, prep_fn, p);
+    free(p);
+    return rc;
 }

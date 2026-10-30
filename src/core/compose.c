@@ -6,6 +6,11 @@
  * curve, and the W3C non-separable Hue/Saturation/Color/Luminosity with
  * ClipColor.  Separable modes are tabulated into 256x256 lookup tables on
  * first use so a Pentium composites with table lookups instead of floats.
+ *
+ * Adjustment layers have no pixels: they recolour the composite built so far
+ * (everything below them) and blend that result back over it with their
+ * opacity, blend mode and mask.  Clipped to a base layer they act only where
+ * the base has coverage.  Alpha is never changed by an adjustment.
  */
 #include "pcdoc.h"
 
@@ -221,17 +226,21 @@ static void blur_mask(u8 *m, int w, int h, int radius)
     free(tmp);
 }
 
+/* Coverage of a layer at pixel i (alpha * mask); adjustment layers cover everything. */
+static int layer_cover(const PcLayer *l, size_t i)
+{
+    int a = l->pix ? l->pix->px[i * 4 + 3] : 255;
+    if (l->mask && l->mask_enabled) a = pc_mul255(a, l->mask->px[i]);
+    return a;
+}
+
 /* Effective layer alpha (pixel alpha * mask) as a separate buffer. */
 static u8 *layer_alpha(const PcLayer *l, int w, int h)
 {
     size_t i, n = (size_t)w * h;
     u8 *a = (u8 *)malloc(n);
     if (!a) return NULL;
-    for (i = 0; i < n; i++) {
-        int v = l->pix->px[i * 4 + 3];
-        if (l->mask && l->mask_enabled) v = pc_mul255(v, l->mask->px[i]);
-        a[i] = (u8)v;
-    }
+    for (i = 0; i < n; i++) a[i] = (u8)layer_cover(l, i);
     return a;
 }
 
@@ -348,6 +357,35 @@ static unsigned hash_noise(unsigned x, unsigned y)
     return h ^ (h >> 16);
 }
 
+static void composite_adjust(const PcDoc *d, const PcLayer *l, const PcLayer *base, PcBuf *out, const PcRect *r)
+{
+    PcAdjPrep *p = (PcAdjPrep *)malloc(sizeof *p);
+    int x, y, w = out->w, gray = d->s.mode == PC_MODE_GRAY;
+    if (!p) return;
+    pc_adjust_prepare(&l->adj, p);
+    for (y = r->y0; y < r->y1; y++) {
+        size_t i = (size_t)y * w + r->x0;
+        u8 *o = out->px + i * 4;
+        for (x = r->x0; x < r->x1; x++, o += 4, i++) {
+            int a = 255;
+            u8 s[3], t[4];
+            if (!o[3]) continue;
+            if (l->mask && l->mask_enabled) a = l->mask->px[i];
+            if (base) a = pc_mul255(a, layer_cover(base, i));
+            if (l->opacity != 255) a = pc_mul255(a, l->opacity);
+            if (!a) continue;
+            s[0] = o[0]; s[1] = o[1]; s[2] = o[2];
+            pc_adjust_pixel(p, s);
+            if (gray) s[0] = s[1] = s[2] = (u8)pc_luma(s[0], s[1], s[2]);
+            /* Blend as over an opaque backdrop, then keep the coverage. */
+            t[0] = o[0]; t[1] = o[1]; t[2] = o[2]; t[3] = 255;
+            pc_blend_pixel(l->blend, t, s, a, l->blend == PC_BLEND_DISSOLVE ? hash_noise((unsigned)x, (unsigned)y) : 0);
+            o[0] = t[0]; o[1] = t[1]; o[2] = t[2];
+        }
+    }
+    free(p);
+}
+
 void pc_doc_composite_into(const PcDoc *d, PcBuf *out, const PcRect *rr)
 {
     PcRect r;
@@ -373,6 +411,7 @@ void pc_doc_composite_into(const PcDoc *d, PcBuf *out, const PcRect *rr)
                 if (!base->visible) continue;
             }
         }
+        if (l->kind == PC_LAYER_ADJUST) { composite_adjust(d, l, base, out, &r); continue; }
         if (l->fx_enabled) {
             fx_below(l, out, &r);
             fxpx = fx_inside(l, d->s.w, d->s.h);
@@ -387,11 +426,7 @@ void pc_doc_composite_into(const PcDoc *d, PcBuf *out, const PcRect *rr)
                 int a = s[3];
                 if (!a) { if (m) m++; continue; }
                 if (m) { a = pc_mul255(a, *m); m++; }
-                if (base) {
-                    int ba = base->pix->px[i * 4 + 3];
-                    if (base->mask && base->mask_enabled) ba = pc_mul255(ba, base->mask->px[i]);
-                    a = pc_mul255(a, ba);
-                }
+                if (base) a = pc_mul255(a, layer_cover(base, i));
                 if (l->opacity != 255) a = pc_mul255(a, l->opacity);
                 if (a) pc_blend_pixel(l->blend, o, s, a, l->blend == PC_BLEND_DISSOLVE ? hash_noise((unsigned)x, (unsigned)y) : 0);
             }

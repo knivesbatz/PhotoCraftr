@@ -221,8 +221,20 @@
     X(CMD_LAYER_STYLE_BEVEL, "&Bevel and Emboss...", "", 0, 0) \
     X(CMD_COMMIT, "Commit", "Enter", 0, 0) \
     X(CMD_CANCEL, "Cancel", "Esc", 0, 0) \
-    /* appended (not next to Grayscale/RGB) so recorded Actions keep their command ids */ \
-    X(CMD_MODE_INDEXED, "&Indexed Color...", "", 0, 0)
+    /* Added after the first release: appended so recorded actions keep their ids. */ \
+    X(CMD_MODE_INDEXED, "&Indexed Color...", "", 0, 0) \
+    /* Layer > New Adjustment Layer (same order as PC_ADJ_*) */ \
+    X(CMD_ADJ_BRIGHTNESS_CONTRAST, "&Brightness/Contrast...", "", 0, 0) \
+    X(CMD_ADJ_LEVELS, "&Levels...", "", 0, 0) \
+    X(CMD_ADJ_CURVES, "&Curves...", "", 0, 0) \
+    X(CMD_ADJ_COLOR_BALANCE, "C&olor Balance...", "", 0, 0) \
+    X(CMD_ADJ_HUE_SAT, "&Hue/Saturation...", "", 0, 0) \
+    X(CMD_ADJ_CHANNEL_MIXER, "Channel &Mixer...", "", 0, 0) \
+    X(CMD_ADJ_INVERT, "&Invert", "", 0, 0) \
+    X(CMD_ADJ_THRESHOLD, "&Threshold...", "", 0, 0) \
+    X(CMD_ADJ_POSTERIZE, "&Posterize...", "", 0, 0) \
+    X(CMD_ADJ_EDIT, "Layer C&ontent Options...", "", 0, 0) \
+    X(CMD_WIN_ADJUSTMENTS, "A&djustments", "", 0, 0)
 
 #define X(id, label, sc, vk, mods) id,
 enum { PC_COMMANDS(X) CMD_COUNT };

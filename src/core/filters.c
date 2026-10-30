@@ -557,7 +557,7 @@ int pc_filter_apply(PcDoc *d, int f, const PcFilterParams *p)
     size_t n = (size_t)d->s.w * d->s.h;
     u8 *res;
     int rc;
-    if (!l || l->lock_pixels) return -1;
+    if (!l || l->lock_pixels || !l->pix) return -1;
     res = (u8 *)pc_alloc_checked(n, 4, 1, 0);
     if (!res) return -1;
     rc = pc_filter_run(f, p, l->pix->px, res, d->s.w, d->s.h);

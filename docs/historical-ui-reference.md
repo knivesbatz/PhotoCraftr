@@ -990,8 +990,9 @@ as a Win95 popup menu with 22 px items).
 | Icon column (32 px) | **[History \| Actions]** (two icons, one group) | flyout 214×260 | History is CS6's top icon. Actions was grouped with History and Layers in PS5. Both are used occasionally. |
 | | **[Brushes]** | flyout 214×200 | The Options bar has its own brush picker, so the full panel is needed only to edit tips. CS6 puts brush panels in icons too. |
 | Expanded column (214 px) | **[Color \| Swatches]** | 110 (fixed) | Exactly CS6's top group, and a PS5 pair |
-| | **[Navigator \| Info]** | 142 (collapsed to its 20 px tab row when the workspace is under 600 px tall) | Takes the slot of CS6's [Adjustments \| Styles], which has no PS5 equivalent. Navigator and Info were PS5's top group. |
-| | **[Layers \| Channels \| Paths]** | fills the rest (403 px at 1024×768) | Exactly CS6's bottom group and PS5's |
+| | **[Navigator \| Info]** | 142 (collapsed to its 20 px tab row when the workspace is under 600 px tall) | Takes the slot of CS6's [Adjustments \| Styles] group (Styles has no PS5 equivalent). Navigator and Info were PS5's top group. |
+| | **[Adjustments]** | 68 (one row of nine 22 px buttons; collapsed under 560 px) | CS6 keeps Adjustments right above Layers. It offers only the nine adjustment layers PS5 had (Layer > New Adjustment Layer). Added after 0.1.0. |
+| | **[Layers \| Channels \| Paths]** | fills the rest (335 px at 1024×768) | Exactly CS6's bottom group and PS5's |
 
 - There is no Character/Paragraph panel in v1. Type is set in the PS5 Type Tool dialog plus the
   Options bar. A [Character | Paragraph] icon group is reserved for later.

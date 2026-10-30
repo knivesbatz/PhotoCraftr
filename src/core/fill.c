@@ -14,6 +14,27 @@ static int fill_with(PcDoc *d, const u8 *weights, SrcFn fn, void *ctx, int opaci
     int op = PC_CLAMP(opacity, 0, 100) * 255 / 100;
     u8 *p;
     if (!l || l->lock_pixels) return -1;
+    if (!l->pix && l->mask) {
+        /* Adjustment layer: fills and gradients paint its mask in gray. */
+        u8 *m = pc_layer_mask_w(l);
+        if (!m) return -1;
+        for (y = 0; y < h; y++)
+            for (x = 0; x < w; x++) {
+                size_t i = (size_t)y * w + x;
+                int a = weights ? weights[i] : pc_sel_at(d, x, y);
+                u8 src[4], t[4];
+                if (!a) continue;
+                fn(x, y, src, ctx);
+                a = pc_mul255(pc_mul255(a, op), src[3]);
+                if (!a) continue;
+                t[0] = t[1] = t[2] = m[i]; t[3] = 255;
+                src[0] = src[1] = src[2] = (u8)pc_luma(src[0], src[1], src[2]);
+                pc_blend_pixel(blend, t, src, a, (unsigned)(x * 2654435761u) ^ (unsigned)(y * 40503u));
+                m[i] = t[0];
+            }
+        pc_doc_touch(d);
+        return 0;
+    }
     p = pc_layer_pixels_w(l);
     if (!p) return -1;
     preserve = preserve || l->lock_alpha || l->is_background;
@@ -74,6 +95,7 @@ int pc_fill_history(PcDoc *d, int opacity, int blend)
     int li;
     if (!hs || hs->w != d->s.w || hs->h != d->s.h || hs->nlayers < 1) return -1;
     li = d->s.active < hs->nlayers ? d->s.active : hs->nlayers - 1;
+    if (!hs->layers[li]->pix) return -1;
     return fill_with(d, NULL, src_buf, hs->layers[li]->pix, opacity, blend, 0);
 }
 
@@ -131,7 +153,7 @@ int pc_bucket_fill(PcDoc *d, int x, int y, u32 rgb, int tol, int contiguous, int
     int w = d->s.w, h = d->s.h, rc;
     size_t i, n = (size_t)w * h;
     if (!l || x < 0 || y < 0 || x >= w || y >= h) return -1;
-    src = merged ? pc_doc_composite(d) : pc_buf_ref(l->pix);
+    src = (merged || !l->pix) ? pc_doc_composite(d) : pc_buf_ref(l->pix);   /* adjustment: what is seen */
     if (!src) return -1;
     m = (u8 *)pc_alloc_checked(n, 1, 1, 1);
     if (!m) { pc_buf_unref(src); return -1; }

@@ -17,6 +17,7 @@ the Windows 95 API, so it targets Windows 95, 98, ME, NT 4.0, 2000, XP, Vista,
 |---|---|
 | ![Menus](docs/images/app-menus.png) | ![1998 floating palettes](docs/images/app-1998-palettes.png) |
 | ![Curves](docs/images/dialog-curves.png) | ![Color Picker](docs/images/dialog-color-picker.png) |
+| ![Adjustments panel and adjustment layers](docs/images/panel-adjustments.png) | ![Curves adjustment layer with live preview](docs/images/dialog-adjustment-layer.png) |
 
 > PhotoCraft Classic is an independent open-source project. It is not affiliated
 > with or endorsed by Adobe. Photoshop is mentioned only to describe the style the
@@ -34,8 +35,14 @@ the Windows 95 API, so it targets Windows 95, 98, ME, NT 4.0, 2000, XP, Vista,
 - **Layers:** 17 blend modes, opacity, layer masks, clipping groups and locks.
   Type layers stay editable. Layer effects: drop shadow, inner shadow, outer
   glow, bevel.
+- **Adjustment layers:** Brightness/Contrast, Levels, Curves, Color Balance,
+  Hue/Saturation, Channel Mixer, Invert, Threshold and Posterize (the types
+  Photoshop 5.0 had), from Layer > New Adjustment Layer or the Adjustments
+  panel. Each has a layer mask you paint on, opacity, blend mode and
+  clipping; double-click the thumbnail to change the settings. They are
+  saved in PSD files the way Photoshop saves them.
 - **Panels:**
-  - Navigator, Info, Color, Swatches and Brushes.
+  - Navigator, Info, Color, Swatches, Brushes and Adjustments.
   - Layers, Channels (including alpha channels and Quick Mask) and Paths.
   - History, with snapshots and the History Brush.
   - Actions, which record commands with their dialog settings and replay them.
@@ -106,7 +113,7 @@ Every other format keeps the strict 1998 rules.
 
 ## Status and compatibility
 
-This is the first preview (0.1.0). The executables pass an import audit against
+This is a preview release (0.2.0). The executables pass an import audit against
 a curated list of Windows 95 functions, contain no SSE/MMX code, and declare
 subsystem 4.0. They have been smoke-tested under Wine with Wine set to report
 Windows 95, 98 and 10. **They have not yet been run on real Windows machines.**

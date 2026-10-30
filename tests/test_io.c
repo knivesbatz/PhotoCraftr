@@ -1,6 +1,6 @@
 /*
  * Codec tests: round trips for every format, PSD structure (layers, masks,
- * names, blend modes, alpha channels, resolution, hand-built files with
+ * names, blend modes, alpha channels, resolution, adjustment layers, hand-built files with
  * out-of-canvas layers, groups, ZIP channels, 16-bit, CMYK, indexed),
  * detection, and fuzzing (truncations + random mutations) under ASan.
  *
@@ -1248,6 +1248,155 @@ static void test_external(void)
     fclose(lf);
 }
 
+/* ---------------- PSD adjustment layers ---------------- */
+
+static PcDoc *adj_ramp(int mode)
+{
+    PcDoc *d = pc_doc_new(20, 12, mode, 72, 0, 0);
+    u8 *p;
+    int x, y;
+    if (!d) return NULL;
+    p = pc_layer_pixels_w(d->s.layers[0]);
+    for (y = 0; y < 12; y++)
+        for (x = 0; x < 20; x++, p += 4) {
+            p[0] = (u8)(x * 13); p[1] = (u8)(y * 21); p[2] = (u8)((x * 7 + y * 11) & 255); p[3] = 255;
+            if (mode == PC_MODE_GRAY) p[1] = p[2] = p[0];
+        }
+    return d;
+}
+
+static void adj_params(PcAdjust *a, int t, int variant)
+{
+    pc_adjust_default(a, t);
+    switch (t) {
+    case PC_ADJ_BRIGHTNESS_CONTRAST: a->brightness = -35; a->contrast = 60; break;
+    case PC_ADJ_LEVELS:
+        a->levels.in_black[0] = 12; a->levels.in_white[0] = 230; a->levels.gamma[0] = 1.25f;
+        a->levels.out_black[1] = 20; a->levels.out_white[2] = 200; a->levels.gamma[3] = 0.6f;
+        if (variant) { a->levels.in_black[1] = 40; a->levels.gamma[1] = 2.0f; }
+        break;
+    case PC_ADJ_CURVES:
+        a->curves.c[0].n = 3; a->curves.c[0].x[1] = 90; a->curves.c[0].y[1] = 140; a->curves.c[0].x[2] = 255; a->curves.c[0].y[2] = 255;
+        a->curves.c[2].n = 4; a->curves.c[2].x[0] = 10; a->curves.c[2].y[0] = 0; a->curves.c[2].x[1] = 64; a->curves.c[2].y[1] = 40;
+        a->curves.c[2].x[2] = 190; a->curves.c[2].y[2] = 220; a->curves.c[2].x[3] = 250; a->curves.c[2].y[3] = 255;
+        break;
+    case PC_ADJ_COLOR_BALANCE: a->balance.v[0][1] = -20; a->balance.v[1][0] = 45; a->balance.v[2][2] = 30; a->balance.preserve_luminosity = variant; break;
+    case PC_ADJ_HUE_SAT:
+        if (variant) { a->huesat.colorize = 1; a->huesat.hue[0] = 250; a->huesat.sat[0] = 60; a->huesat.light[0] = -10; }
+        else { a->huesat.hue[0] = -40; a->huesat.sat[0] = 30; a->huesat.light[0] = 5; a->huesat.hue[2] = 20; a->huesat.sat[5] = -50; a->huesat.light[6] = 15; }
+        break;
+    case PC_ADJ_CHANNEL_MIXER:
+        a->mixer[0][0] = 60; a->mixer[0][1] = 30; a->mixer[0][2] = 10; a->mixer[1][3] = -12; a->mixer[2][0] = 150;
+        if (variant) { a->mixer_mono = 1; memcpy(a->mixer[1], a->mixer[0], sizeof a->mixer[0]); memcpy(a->mixer[2], a->mixer[0], sizeof a->mixer[0]); }
+        break;
+    case PC_ADJ_THRESHOLD: a->threshold = 97; break;
+    case PC_ADJ_POSTERIZE: a->posterize = 5; break;
+    }
+}
+
+static int adj_same(const PcAdjust *a, const PcAdjust *b, int gray)
+{
+    int k, ch;
+    if (a->type != b->type) return 0;
+    switch (a->type) {
+    case PC_ADJ_BRIGHTNESS_CONTRAST: return a->brightness == b->brightness && a->contrast == b->contrast;
+    case PC_ADJ_LEVELS:
+        for (ch = 0; ch < (gray ? 2 : 4); ch++)
+            if (a->levels.in_black[ch] != b->levels.in_black[ch] || a->levels.in_white[ch] != b->levels.in_white[ch] ||
+                a->levels.out_black[ch] != b->levels.out_black[ch] || a->levels.out_white[ch] != b->levels.out_white[ch] ||
+                (int)(a->levels.gamma[ch] * 100 + 0.5f) != (int)(b->levels.gamma[ch] * 100 + 0.5f)) return 0;
+        return 1;
+    case PC_ADJ_CURVES:
+        for (ch = 0; ch < 4; ch++) {
+            if (a->curves.c[ch].n != b->curves.c[ch].n) return 0;
+            for (k = 0; k < a->curves.c[ch].n; k++)
+                if (a->curves.c[ch].x[k] != b->curves.c[ch].x[k] || a->curves.c[ch].y[k] != b->curves.c[ch].y[k]) return 0;
+        }
+        return 1;
+    case PC_ADJ_COLOR_BALANCE: return !memcmp(&a->balance, &b->balance, sizeof a->balance);
+    case PC_ADJ_HUE_SAT:
+        if (a->huesat.colorize != b->huesat.colorize) return 0;
+        for (k = a->huesat.colorize ? 0 : 0; k < (a->huesat.colorize ? 1 : 7); k++)
+            if (a->huesat.hue[k] != b->huesat.hue[k] || a->huesat.sat[k] != b->huesat.sat[k] || a->huesat.light[k] != b->huesat.light[k]) return 0;
+        return 1;
+    case PC_ADJ_CHANNEL_MIXER: return a->mixer_mono == b->mixer_mono && !memcmp(a->mixer, b->mixer, sizeof a->mixer);
+    case PC_ADJ_THRESHOLD: return a->threshold == b->threshold;
+    case PC_ADJ_POSTERIZE: return a->posterize == b->posterize;
+    }
+    return 1;
+}
+
+static void test_psd_adjust(void)
+{
+    int t, variant, mode;
+    for (mode = 0; mode < 2; mode++)
+    for (t = 0; t < PC_ADJ_COUNT; t++)
+        for (variant = 0; variant < 2; variant++) {
+            PcDoc *d = adj_ramp(mode), *r = NULL;
+            PcAdjust a;
+            PcLayer *l;
+            u8 *buf = NULL;
+            size_t n = 0, k;
+            char err[128] = "", name[48];
+            if (mode && variant) { pc_doc_free(d); continue; }
+            adj_params(&a, t, variant);
+            if (mode) {
+                /* Grayscale documents have one channel: the dialogs offer only the composite. */
+                PcAdjust id;
+                pc_adjust_default(&id, t);
+                for (k = 1; k < 4; k++) {
+                    a.levels.in_black[k] = 0; a.levels.in_white[k] = 255; a.levels.gamma[k] = 1.0f;
+                    a.levels.out_black[k] = 0; a.levels.out_white[k] = 255;
+                    a.curves.c[k] = id.curves.c[k];
+                }
+            }
+            l = d ? pc_doc_add_adjustment(d, &a, NULL, 0) : NULL;
+            if (!l) { CHECK(0); pc_doc_free(d); continue; }
+            for (k = 0; k < 20 * 12; k++) if (k % 20 >= 14) l->mask->px[k] = (u8)(k % 20 == 14 ? 128 : 0);
+            l->opacity = variant ? 255 : 210;
+            l->blend = variant ? PC_BLEND_NORMAL : PC_BLEND_SCREEN;
+            if (variant) { pc_doc_add_layer(d, NULL); d->s.layers[2]->visible = 0; d->s.active = 1; }
+            CHECK_EQ(pc_psd_save(d, &buf, &n, err, sizeof err), 0);
+            snprintf(name, sizeof name, "adjust_%d%s%s.psd", t, variant ? "b" : "", mode ? "_gray" : "");
+            dump(name, buf, n);
+            r = buf ? pc_psd_load(buf, n, err, sizeof err) : NULL;
+            CHECK(r != NULL);
+            if (r) {
+                CHECK_EQ(r->s.nlayers, d->s.nlayers);
+                if (r->s.nlayers >= 2) {
+                    PcLayer *q = r->s.layers[1];
+                    CHECK_EQ(q->kind, PC_LAYER_ADJUST);
+                    CHECK(q->pix == NULL);
+                    CHECK(adj_same(&l->adj, &q->adj, mode));
+                    CHECK(!strcmp(q->name, l->name));
+                    CHECK_EQ(q->opacity, l->opacity);
+                    CHECK_EQ(q->blend, l->blend);
+                    CHECK(q->mask && !memcmp(q->mask->px, l->mask->px, 20 * 12));
+                    CHECK(!q->is_background);
+                    CHECK_EQ(cmp_comp(d, r, NULL), 0);
+                }
+                pc_doc_free(r);
+            }
+            /* stb reads the merged image: the adjustment is baked into it */
+            if (buf && !mode) {
+                int w, h, c;
+                unsigned char *px = stbi_load_from_memory(buf, (int)n, &w, &h, &c, 4);
+                PcBuf *cc = pc_doc_composite(d);
+                CHECK(px != NULL);
+                if (px && cc) {
+                    int bad = 0;
+                    for (k = 0; k < 20 * 12 * 4; k++) if (k % 4 != 3 && px[k] != cc->px[k]) bad++;
+                    CHECK_EQ(bad, 0);
+                }
+                free(px);
+                pc_buf_unref(cc);
+            }
+            if (buf && t == PC_ADJ_HUE_SAT && !variant && !mode) fuzz_one(buf, n, name, 300);
+            free(buf);
+            pc_doc_free(d);
+        }
+}
+
 /* ---------------- the 1998 output rule ---------------- */
 
 static PcDoc *save_load(const PcDoc *d, int fmt, const PcSaveOpts *o, u8 **file, size_t *filen, const char *dumpname)
@@ -1634,6 +1783,7 @@ int test_io(void)
     test_1998_depths();
     test_psd_roundtrip();
     test_psd_handbuilt();
+    test_psd_adjust();
     test_tiff_handbuilt();
     test_fuzz();
     test_external();

@@ -38,6 +38,7 @@ static int g_column_iconic;     /* expanded column collapsed to icons (CS6 chevr
 #define ICON_COL_W 32
 #define PANEL_COL_W 214
 #define ICON_BTN_H 26
+#define ADJ_GROUP_H 68      /* Adjustments: tab row, caption and one row of buttons */
 
 static LRESULT CALLBACK body_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 static LRESULT CALLBACK float_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -793,20 +794,25 @@ static void build_default(void)
     g_ng = 0;
     g_column_iconic = 0;
     /* Icon column: History | Actions, Brushes.  Panel column: Color | Swatches,
-     * Navigator | Info, Layers | Channels | Paths (see docs/historical-ui-reference.md). */
+     * Navigator | Info, Adjustments (CS6 keeps it right above Layers),
+     * Layers | Channels | Paths (see docs/historical-ui-reference.md). */
     g = new_group(HOST_ICONS); add_panel_to(g, P_HISTORY, 1); add_panel_to(g, P_ACTIONS, 0); g_g[g].active = 0;
     g = new_group(HOST_ICONS); add_panel_to(g, P_BRUSHES, 1);
     g = new_group(HOST_COLUMN); add_panel_to(g, P_COLOR, 1); add_panel_to(g, P_SWATCHES, 0); g_g[g].active = 0; g_g[g].height = 112;
     g = new_group(HOST_COLUMN); add_panel_to(g, P_NAVIGATOR, 1); add_panel_to(g, P_INFO, 0); g_g[g].active = 0; g_g[g].height = 142;
+    g = new_group(HOST_COLUMN); add_panel_to(g, P_ADJUSTMENTS, 1); g_g[g].height = ADJ_GROUP_H;
     g = new_group(HOST_COLUMN); add_panel_to(g, P_LAYERS, 1); add_panel_to(g, P_CHANNELS, 0); add_panel_to(g, P_PATHS, 0); g_g[g].active = 0;
-    if (GetSystemMetrics(SM_CYSCREEN) < 700) g_g[3].collapsed = 1;   /* 800x600: Navigator|Info starts collapsed */
+    /* 800x600: Navigator|Info starts collapsed; 640x480: Adjustments too (double-click a tab to open). */
+    if (GetSystemMetrics(SM_CYSCREEN) < 700) g_g[3].collapsed = 1;
+    if (GetSystemMetrics(SM_CYSCREEN) < 560) g_g[4].collapsed = 1;
     for (k = 0; k < P_COUNT; k++) if (g_body[k]) ShowWindow(g_body[k], SW_HIDE);
 }
 
 static void build_classic98(void)
 {
     /* Photoshop 5.0's own default: four floating palette groups down the right edge. */
-    static const int groups[4][3] = { { P_NAVIGATOR, P_INFO, -1 }, { P_COLOR, P_SWATCHES, P_BRUSHES }, { P_HISTORY, P_ACTIONS, -1 }, { P_LAYERS, P_CHANNELS, P_PATHS } };
+    static const int groups[4][4] = { { P_NAVIGATOR, P_INFO, -1, -1 }, { P_COLOR, P_SWATCHES, P_BRUSHES, -1 }, { P_HISTORY, P_ACTIONS, -1, -1 },
+                                      { P_LAYERS, P_CHANNELS, P_PATHS, P_ADJUSTMENTS } };
     static const int heights[4] = { 190, 170, 170, 230 };
     RECT wa;
     int g, i, k, y;
@@ -816,7 +822,7 @@ static void build_classic98(void)
     y = wa.top + 60;
     for (i = 0; i < 4; i++) {
         g = new_group(HOST_FLOAT);
-        for (k = 0; k < 3; k++) if (groups[i][k] >= 0) add_panel_to(g, groups[i][k], k == 0);
+        for (k = 0; k < 4; k++) if (groups[i][k] >= 0) add_panel_to(g, groups[i][k], k == 0);
         g_g[g].active = 0;
         SetRect(&g_g[g].frect, wa.right - PANEL_COL_W - 14, y, wa.right - 8, y + heights[i]);
         y += heights[i] + 4;
@@ -844,7 +850,11 @@ void dock_classic_workspace(void)
     dock_save_workspace();
 }
 
+/* Registry layout.  "Layout2" holds SavedGroup[MAXG]; 0.1.0 wrote "Layout"
+ * with room for its 10 panels only (SavedGroupV1), which is still read: panels
+ * it does not know (Adjustments) are then added where Essentials has them. */
 typedef struct { int host, n, active, collapsed, visible, height; int panels[P_COUNT]; RECT frect; } SavedGroup;
+typedef struct { int host, n, active, collapsed, visible, height; int panels[P_COUNT_V1]; RECT frect; } SavedGroupV1;
 
 void dock_save_workspace(void)
 {
@@ -858,20 +868,53 @@ void dock_save_workspace(void)
     }
     reg_set_int("Workspace", "Groups", g_ng);
     reg_set_int("Workspace", "ColumnIconic", g_column_iconic);
-    reg_set_bin("Workspace", "Layout", s, sizeof s);
+    reg_set_bin("Workspace", "Layout2", s, sizeof s);
+}
+
+/* Put a panel missing from a loaded layout back where Essentials keeps it. */
+static void add_missing_panel(int p)
+{
+    int g, lg = group_of(P_LAYERS), ng;
+    if (p == P_ADJUSTMENTS && lg >= 0 && g_g[lg].host == HOST_COLUMN && g_ng < MAXG) {
+        Group t;
+        ng = new_group(HOST_COLUMN);
+        add_panel_to(ng, p, 1);
+        g_g[ng].height = ADJ_GROUP_H;
+        g_g[ng].collapsed = GetSystemMetrics(SM_CYSCREEN) < 560;
+        /* move it just above the Layers group */
+        t = g_g[ng];
+        memmove(&g_g[lg + 1], &g_g[lg], sizeof(Group) * (ng - lg));
+        g_g[lg] = t;
+        return;
+    }
+    if (lg >= 0) { add_panel_to(lg, p, 0); return; }
+    g = new_group(HOST_FLOAT);
+    if (g >= 0) add_panel_to(g, p, 1);
+    else if (g_ng > 0) add_panel_to(0, p, 0);
 }
 
 static int load_from(const char *sub)
 {
     SavedGroup s[MAXG];
     int n = reg_get_int(sub, "Groups", 0), g, k, seen[P_COUNT];
-    if (n <= 0 || n > MAXG || !reg_get_bin(sub, "Layout", s, sizeof s)) return 0;
+    if (n <= 0 || n > MAXG) return 0;
+    memset(s, 0, sizeof s);
+    if (!reg_get_bin(sub, "Layout2", s, sizeof s)) {
+        SavedGroupV1 v[P_COUNT_V1];
+        if (n > P_COUNT_V1 || !reg_get_bin(sub, "Layout", v, sizeof v)) return 0;
+        for (g = 0; g < n; g++) {
+            s[g].host = v[g].host; s[g].n = v[g].n; s[g].active = v[g].active; s[g].collapsed = v[g].collapsed;
+            s[g].visible = v[g].visible; s[g].height = v[g].height; s[g].frect = v[g].frect;
+            if (v[g].n < 0 || v[g].n > P_COUNT_V1) return 0;
+            for (k = 0; k < v[g].n; k++) s[g].panels[k] = v[g].panels[k];
+        }
+    }
     memset(seen, 0, sizeof seen);
     for (g = 0; g < n; g++) {
         if (s[g].n < 0 || s[g].n > P_COUNT || s[g].host < 0 || s[g].host > HOST_FLOAT) return 0;
         for (k = 0; k < s[g].n; k++) { if (s[g].panels[k] < 0 || s[g].panels[k] >= P_COUNT || seen[s[g].panels[k]]) return 0; seen[s[g].panels[k]] = 1; }
     }
-    for (k = 0; k < P_COUNT; k++) if (!seen[k]) return 0;
+    for (k = 0; k < P_COUNT_V1; k++) if (!seen[k]) return 0;
     for (g = 0; g < g_ng; g++) group_destroy_window(&g_g[g]);
     g_ng = 0;
     for (g = 0; g < n; g++) {
@@ -881,6 +924,7 @@ static int load_from(const char *sub)
         g_g[ng].collapsed = s[g].collapsed; g_g[ng].visible = s[g].visible;
         g_g[ng].height = PC_CLAMP(s[g].height, TAB_H + 20, 2000); g_g[ng].frect = s[g].frect;
     }
+    for (k = P_COUNT_V1; k < P_COUNT; k++) if (!seen[k]) add_missing_panel(k);
     g_column_iconic = reg_get_int(sub, "ColumnIconic", 0);
     return 1;
 }
@@ -897,8 +941,8 @@ void dock_store_named(void)
 {
     SavedGroup s[MAXG];
     dock_save_workspace();
-    if (reg_get_bin("Workspace", "Layout", s, sizeof s)) {
-        reg_set_bin("Workspace\\Saved", "Layout", s, sizeof s);
+    if (reg_get_bin("Workspace", "Layout2", s, sizeof s)) {
+        reg_set_bin("Workspace\\Saved", "Layout2", s, sizeof s);
         reg_set_int("Workspace\\Saved", "Groups", reg_get_int("Workspace", "Groups", 0));
         reg_set_int("Workspace\\Saved", "ColumnIconic", g_column_iconic);
     }
@@ -941,7 +985,7 @@ void dock_refresh(int what)
     static const int masks[P_COUNT] = {
         [P_NAVIGATOR] = R_NAV | R_CANVAS, [P_INFO] = R_INFO, [P_COLOR] = R_COLOR, [P_SWATCHES] = R_COLOR,
         [P_BRUSHES] = R_OPTIONS | R_TOOLS, [P_LAYERS] = R_LAYERS, [P_CHANNELS] = R_CHANNELS | R_LAYERS,
-        [P_PATHS] = R_PATHS, [P_HISTORY] = R_HISTORY, [P_ACTIONS] = R_ALL
+        [P_PATHS] = R_PATHS, [P_HISTORY] = R_HISTORY, [P_ACTIONS] = R_ALL, [P_ADJUSTMENTS] = R_LAYERS | R_TABS | R_TITLE
     };
     for (p = 0; p < P_COUNT; p++) {
         if (!g_body[p] || !IsWindowVisible(g_body[p])) continue;

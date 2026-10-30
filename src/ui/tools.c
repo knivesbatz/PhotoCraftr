@@ -539,7 +539,7 @@ void tool_mouse(DocView *v, UINT msg, int x, int y, WPARAM wp)
                 int li;
                 for (li = d->s.nlayers - 1; li >= 0; li--) {
                     PcLayer *q = d->s.layers[li];
-                    if (q->visible && dx >= 0 && dy >= 0 && dx < d->s.w && dy < d->s.h && q->pix->px[((size_t)(int)dy * d->s.w + (int)dx) * 4 + 3] > 20) { d->s.active = li; break; }
+                    if (q->visible && q->pix && dx >= 0 && dy >= 0 && dx < d->s.w && dy < d->s.h && q->pix->px[((size_t)(int)dy * d->s.w + (int)dx) * 4 + 3] > 20) { d->s.active = li; break; }
                 }
                 app_refresh(R_LAYERS);
             }

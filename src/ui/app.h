@@ -277,7 +277,10 @@ void dock_show_panel(int panel);
 int dock_panel_visible(int panel);
 void dock_toggle_panel(int panel);
 void dock_close_flyout(void);
-enum { P_NAVIGATOR, P_INFO, P_COLOR, P_SWATCHES, P_BRUSHES, P_LAYERS, P_CHANNELS, P_PATHS, P_HISTORY, P_ACTIONS, P_COUNT };
+/* Saved workspaces store these numbers: new panels go at the end. */
+enum { P_NAVIGATOR, P_INFO, P_COLOR, P_SWATCHES, P_BRUSHES, P_LAYERS, P_CHANNELS, P_PATHS, P_HISTORY, P_ACTIONS,
+       P_ADJUSTMENTS, P_COUNT };
+#define P_COUNT_V1 10    /* panels in 0.1.0 workspaces */
 
 /* panels.c: per-panel drawing/interaction, used by dock.c */
 typedef struct PanelCtx { HWND hwnd; RECT r; } PanelCtx;
@@ -337,8 +340,11 @@ int dlg_hue_sat(PcDoc *d, PcHueSat *hs);
 int dlg_color_balance(PcDoc *d, PcColorBalance *cb);
 int dlg_brightness_contrast(PcDoc *d, int *b, int *c);
 int dlg_threshold(PcDoc *d, int *level);
-int dlg_posterize(int *levels);
+int dlg_posterize(PcDoc *d, int *levels);
 int dlg_channel_mixer(PcDoc *d, int m[3][4], int *mono);
+/* An adjustment layer's dialog: previews by changing the active (adjustment)
+ * layer's parameters; Invert has none and returns 1 at once. */
+int dlg_adjust_layer(PcDoc *d, PcAdjust *a);
 int dlg_filter(PcDoc *d, int filter, PcFilterParams *p);
 int dlg_color_picker(const char *title, u32 *color);
 int dlg_preferences(void);
@@ -387,6 +393,7 @@ void dock_classic_workspace(void);
 void dock_store_named(void);
 int dock_load_named(void);
 int cmd_label(int cmd, char *buf, int n);
+int adjust_icon(int type);                  /* panels.c: PC_ICON_ADJ_* of a PC_ADJ_* type */
 
 /* misc helpers (app.c) */
 u32 app_sample_color(DocView *v, int x, int y, int size, int merged);

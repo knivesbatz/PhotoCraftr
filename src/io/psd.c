@@ -15,10 +15,11 @@
  * (later modes map to the nearest 1998 one), opacity, clipping,
  * visibility, transparency lock, Unicode or UTF-8 names, alpha channels
  * and resolution are kept.  Groups are flattened away (their divider
- * records are skipped; a hidden group hides its layers).  Text, shape,
- * fill, smart-object and adjustment layers load as whatever pixels they
- * store (fill opacity, layer effects and vector-only content are not
- * rendered).  PSB (version 2) is refused.  At most PC_MAX_LAYERS layers
+ * records are skipped; a hidden group hides its layers).  Adjustment
+ * layers of the nine types we have (see below) load as adjustment layers.
+ * Text, shape, fill, smart-object and other adjustment layers load as
+ * whatever pixels they store (fill opacity, layer effects and vector-only
+ * content are not rendered).  PSB (version 2) is refused.  At most PC_MAX_LAYERS layers
  * load; the rest are dropped with a note in err.
  *
  * Writing: version 1, 8 bits, RGB or Grayscale, RLE everywhere, every
@@ -28,6 +29,26 @@
  * Photoshop) followed by the document's alpha channels.  Text layers are
  * written as plain pixel layers (their rendered pixels): we do not write
  * Photoshop's 'TySh' type data.
+ *
+ * Adjustment layers are written as Photoshop writes them: an empty layer
+ * (bounds 0, empty channels, flags 0x18) carrying its mask and one of
+ * Photoshop's own adjustment blocks, laid out as in Adobe's file format
+ * specification ("Adjustment layers") and as psd-tools reads them:
+ *   'brit' i16 brightness, i16 contrast, u16 mean (127), u8 Lab-only, pad
+ *   'levl' u16 version 2, 29 records of u16 in-black, in-white, out-black,
+ *          out-white, gamma*100 (record 0 composite, then the channels)
+ *   'curv' u8 0, u16 version 1, u32 channel bitmap, per channel u16 count +
+ *          (u16 output, u16 input) points; then 'Crv ' u16 4, u32 count and
+ *          per channel u16 index, u16 count, points
+ *   'blnc' 3 x 3 i16 (shadows, midtones, highlights; cyan-red, magenta-
+ *          green, yellow-blue), u8 preserve luminosity, pad
+ *   'hue2' u16 2, u8 colorize, pad, i16 x3 colorize HSL, i16 x3 master,
+ *          6 ranges of u16 x4 range bounds + i16 x3 hue/sat/lightness
+ *   'mixr' u16 1, u16 monochrome, 4 records of i16 R, G, B, K(0), constant %
+ *   'nvrt' empty;  'thrs' / 'post' u16 value, pad
+ * A 'CgEd' descriptor next to 'brit' (Photoshop CS3 and later) overrides
+ * its brightness and contrast when it has 'Brgh' / 'Cntr' integers; the
+ * legacy (Photoshop 5) formula is always used.
  */
 #include "io/ioint.h"
 
@@ -56,6 +77,8 @@ typedef struct {
     char name[64];
     int section;          /* 0 layer, 1/2 group (open/closed) record, 3 group end divider */
     int hidden_by_group;
+    int adj_type;         /* PC_ADJ_* + 1 when an adjustment block we read was found */
+    PcAdjust adj;
 } PsdRec;
 
 typedef struct {
@@ -346,9 +369,140 @@ static int add_chan(PsdCtx *c, int id, u32 len)
     return 0;
 }
 
+/* ---------------- adjustment layer blocks ---------------- */
+
+static const char k_adj_keys[PC_ADJ_COUNT][5] = { "brit", "levl", "curv", "blnc", "hue2", "mixr", "nvrt", "thrs", "post" };
+
+static int adj_type_of(const u8 *key)
+{
+    int t;
+    for (t = 0; t < PC_ADJ_COUNT; t++) if (!memcmp(key, k_adj_keys[t], 4)) return t;
+    return -1;
+}
+
+/* One 16-bit value clamped to lo..hi (read once: PC_CLAMP evaluates twice). */
+static int rd_i16_in(PcRd *b, int lo, int hi) { int v = rd_i16be(b); return PC_CLAMP(v, lo, hi); }
+static int rd_u16_in(PcRd *b, int lo, int hi) { int v = (int)rd_u16be(b); return PC_CLAMP(v, lo, hi); }
+
+static void read_curve(PcRd *b, PcCurve *cu)
+{
+    int n = (int)rd_u16be(b), k, m = 0;
+    for (k = 0; k < n && !b->err; k++) {
+        int out = (int)rd_u16be(b), in = (int)rd_u16be(b);
+        if (b->err || m >= 16 || in > 255 || out > 255) continue;
+        if (m && in <= cu->x[m - 1]) continue;        /* keep x strictly increasing */
+        cu->x[m] = in; cu->y[m] = out; m++;
+    }
+    if (m >= 2) cu->n = m;
+}
+
+/* Parse one adjustment block into a; returns 0 when it was understood. */
+static int parse_adjust(int t, PcRd *b, PcAdjust *a)
+{
+    int k, ch;
+    pc_adjust_default(a, t);
+    switch (t) {
+    case PC_ADJ_BRIGHTNESS_CONTRAST:
+        a->brightness = rd_i16_in(b, -100, 100);
+        a->contrast = rd_i16_in(b, -100, 100);
+        break;
+    case PC_ADJ_LEVELS:
+        if (rd_u16be(b) != 2) return -1;
+        for (ch = 0; ch < 4; ch++) {
+            int ib = (int)rd_u16be(b), iw = (int)rd_u16be(b), ob = (int)rd_u16be(b), ow = (int)rd_u16be(b), g = (int)rd_u16be(b);
+            if (b->err) return -1;
+            a->levels.in_black[ch] = PC_CLAMP(ib, 0, 253);
+            a->levels.in_white[ch] = PC_CLAMP(iw, a->levels.in_black[ch] + 2, 255);
+            a->levels.out_black[ch] = PC_CLAMP(ob, 0, 255);
+            a->levels.out_white[ch] = PC_CLAMP(ow, 0, 255);
+            a->levels.gamma[ch] = (float)PC_CLAMP(g, 10, 999) / 100.0f;
+        }
+        return 0;
+    case PC_ADJ_CURVES: {
+        unsigned bits;
+        if (rd_u8(b) != 0) return -1;                  /* pencil-drawn map: not ours */
+        k = (int)rd_u16be(b);
+        if (k != 1 && k != 4) return -1;
+        bits = rd_u32be(b);
+        if (k == 4) bits = bits >= 32 ? 0xFFFFFFFFu : (1u << bits) - 1;   /* version 4: a count */
+        for (ch = 0; ch < 32 && !b->err; ch++) {
+            PcCurve tmp;
+            if (!(bits & (1u << ch))) continue;
+            memset(&tmp, 0, sizeof tmp);
+            read_curve(b, &tmp);
+            if (ch < 4 && tmp.n >= 2) a->curves.c[ch] = tmp;
+        }
+        break;
+    }
+    case PC_ADJ_COLOR_BALANCE:
+        for (k = 0; k < 9; k++) a->balance.v[k / 3][k % 3] = rd_i16_in(b, -100, 100);
+        a->balance.preserve_luminosity = rd_u8(b) != 0;
+        break;
+    case PC_ADJ_HUE_SAT: {
+        int cz[3], ms[3];
+        if (rd_u16be(b) != 2) return -1;
+        a->huesat.colorize = rd_u8(b) != 0;
+        rd_skip(b, 1);
+        for (k = 0; k < 3; k++) cz[k] = rd_i16be(b);
+        for (k = 0; k < 3; k++) ms[k] = rd_i16be(b);
+        for (k = 1; k <= 6; k++) {
+            rd_skip(b, 8);                              /* range bounds: we use the defaults */
+            a->huesat.hue[k] = rd_i16_in(b, -180, 180);
+            a->huesat.sat[k] = rd_i16_in(b, -100, 100);
+            a->huesat.light[k] = rd_i16_in(b, -100, 100);
+        }
+        if (a->huesat.colorize) {
+            a->huesat.hue[0] = (cz[0] % 360 + 360) % 360;
+            a->huesat.sat[0] = PC_CLAMP(cz[1], 0, 100);
+            a->huesat.light[0] = PC_CLAMP(cz[2], -100, 100);
+        } else {
+            a->huesat.hue[0] = PC_CLAMP(ms[0], -180, 180);
+            a->huesat.sat[0] = PC_CLAMP(ms[1], -100, 100);
+            a->huesat.light[0] = PC_CLAMP(ms[2], -100, 100);
+        }
+        break;
+    }
+    case PC_ADJ_CHANNEL_MIXER:
+        if (rd_u16be(b) != 1) return -1;
+        a->mixer_mono = rd_u16be(b) != 0;
+        for (ch = 0; ch < 3; ch++) {
+            int v[5];
+            for (k = 0; k < 5; k++) v[k] = rd_i16be(b);
+            if (b->err) {
+                if (ch > 0 && a->mixer_mono) { b->err = 0; break; }   /* only the gray record */
+                return -1;
+            }
+            for (k = 0; k < 3; k++) a->mixer[ch][k] = PC_CLAMP(v[k], -200, 200);
+            a->mixer[ch][3] = PC_CLAMP(v[4], -200, 200);
+        }
+        if (a->mixer_mono) for (ch = 1; ch < 3; ch++) memcpy(a->mixer[ch], a->mixer[0], sizeof a->mixer[0]);
+        return 0;
+    case PC_ADJ_INVERT: return 0;
+    case PC_ADJ_THRESHOLD: a->threshold = rd_u16_in(b, 1, 255); break;
+    case PC_ADJ_POSTERIZE: a->posterize = rd_u16_in(b, 2, 255); break;
+    default: return -1;
+    }
+    return b->err ? -1 : 0;
+}
+
+/* The integer value of item `key` (4 chars) of a 'long' type in a descriptor block. */
+static int desc_long(const PcRd *b, const char *key, int *out)
+{
+    size_t i;
+    for (i = 0; i + 16 <= b->n; i++) {
+        const u8 *q = b->p + i;
+        if (!memcmp(q, "\0\0\0\0", 4) && !memcmp(q + 4, key, 4) && !memcmp(q + 8, "long", 4)) {
+            u32 v = get_u32be(q + 12);
+            *out = v >= 0x80000000u ? (int)(v - 0x80000000u) - 0x7FFFFFFF - 1 : (int)v;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int read_record(PsdCtx *c, PcRd *r, PsdRec *L)
 {
-    int i;
+    int i, have_cged = 0, cged_b = 0, cged_c = 0;
     u32 extra;
     PcRd x, m;
     const u8 *q;
@@ -442,6 +596,13 @@ static int read_record(PsdCtx *c, PcRd *r, PsdRec *L)
         } else if (!memcmp(key, "lsct", 4) || (!memcmp(key, "lsdk", 4) && !L->section)) {
             u32 t = rd_u32be(&b);
             if (!b.err && t >= 1 && t <= 3) L->section = (int)t;
+        } else if (adj_type_of(key) >= 0 && !L->adj_type) {
+            int t = adj_type_of(key);
+            if (!parse_adjust(t, &b, &L->adj)) L->adj_type = t + 1;
+        } else if (!memcmp(key, "CgEd", 4)) {
+            int v;
+            if (desc_long(&b, "Brgh", &v)) cged_b = v, have_cged |= 1;
+            if (desc_long(&b, "Cntr", &v)) cged_c = v, have_cged |= 2;
         }
         /* padding: up to 3 bytes before the next signature (or the end) */
         left = rd_left(&x);
@@ -450,6 +611,10 @@ static int read_record(PsdCtx *c, PcRd *r, PsdRec *L)
         }
         if (k > 3) k = (len & 1) && left ? 1 : 0;
         rd_skip(&x, k);
+    }
+    if (L->adj_type == PC_ADJ_BRIGHTNESS_CONTRAST + 1) {
+        if (have_cged & 1) L->adj.brightness = PC_CLAMP(cged_b, -100, 100);
+        if (have_cged & 2) L->adj.contrast = PC_CLAMP(cged_c, -100, 100);
     }
     if (L->opacity > 255) L->opacity = 255;
     return 0;
@@ -596,6 +761,21 @@ static PcLayer *build_layer(PsdCtx *c, const PsdRec *L, int bottom)
     int j, ia = chan_index(c, L, -1), direct = direct_mode(c->mode);
     long long lw = (long long)L->right - L->left, lh = (long long)L->bottom - L->top;
     size_t n = (size_t)c->w * c->h, i;
+    if (L->adj_type) {
+        PcAdjust a = L->adj;
+        if (c->mode != M_RGB) {
+            /* Gray: record 1 is the only channel. */
+            for (j = 2; j <= 3; j++) {
+                a.levels.in_black[j] = a.levels.in_black[1]; a.levels.in_white[j] = a.levels.in_white[1];
+                a.levels.out_black[j] = a.levels.out_black[1]; a.levels.out_white[j] = a.levels.out_white[1];
+                a.levels.gamma[j] = a.levels.gamma[1];
+                a.curves.c[j] = a.curves.c[1];
+            }
+        }
+        l = pc_layer_new_adjust(&a, L->name[0] ? L->name : NULL);
+        if (!l) return NULL;
+        goto mask;
+    }
     l = pc_layer_new(c->w, c->h, L->name[0] ? L->name : "Layer");
     if (!l) return NULL;
     px = l->pix->px;
@@ -631,6 +811,7 @@ static PcLayer *build_layer(PsdCtx *c, const PsdRec *L, int bottom)
     else if (c->mode != M_RGB) for (i = 0; i < n; i++) px[i * 4 + 1] = px[i * 4 + 2] = px[i * 4];
     for (j = 0; j < 4; j++) { free(planes[j]); planes[j] = NULL; }
 
+mask:
     /* Layer mask.  With both a pixel mask and a vector mask, -3 is the
      * user (pixel) mask with the "real" rectangle and -2 the rasterized
      * vector mask; we have no vector masks, so the layer gets their
@@ -675,7 +856,7 @@ static PcLayer *build_layer(PsdCtx *c, const PsdRec *L, int bottom)
     l->lock_alpha = (L->flags & 1) != 0 || (L->protect & 1);
     l->lock_pixels = (L->protect & 2) != 0;
     l->lock_position = (L->protect & 4) != 0;
-    if (bottom && ia < 0 && L->left <= 0 && L->top <= 0 && L->right >= c->w && L->bottom >= c->h) {
+    if (bottom && ia < 0 && !L->adj_type && L->left <= 0 && L->top <= 0 && L->right >= c->w && L->bottom >= c->h) {
         l->is_background = 1;
         l->clip = 0;
         l->lock_alpha = 0;
@@ -1018,6 +1199,90 @@ static void write_pascal(PcWr *w, const char *s, int align)
     wr_fill(w, 0, (align - total % align) % align);
 }
 
+static void put_levels(PcWr *b, const PcLevels *lv, int ch)
+{
+    wr_u16be(b, (unsigned)PC_CLAMP(lv->in_black[ch], 0, 253));
+    wr_u16be(b, (unsigned)PC_CLAMP(lv->in_white[ch], 2, 255));
+    wr_u16be(b, (unsigned)PC_CLAMP(lv->out_black[ch], 0, 255));
+    wr_u16be(b, (unsigned)PC_CLAMP(lv->out_white[ch], 0, 255));
+    wr_u16be(b, (unsigned)PC_CLAMP((int)(lv->gamma[ch] * 100 + 0.5f), 10, 999));
+}
+
+static void put_curve_points(PcWr *b, const PcCurve *cu)
+{
+    int k, n = PC_CLAMP(cu->n, 2, 16);
+    PcCurve id;
+    if (cu->n < 2) { memset(&id, 0, sizeof id); id.n = 2; id.x[1] = id.y[1] = 255; cu = &id; }
+    wr_u16be(b, (unsigned)n);
+    for (k = 0; k < n; k++) {
+        wr_u16be(b, (unsigned)PC_CLAMP(cu->y[k], 0, 255));   /* output first */
+        wr_u16be(b, (unsigned)PC_CLAMP(cu->x[k], 0, 255));
+    }
+}
+
+static void wr_i16(PcWr *b, int v) { wr_u16be(b, (unsigned)(PC_CLAMP(v, -32768, 32767) & 0xFFFF)); }
+
+/* Photoshop's adjustment block for a (layout in the header comment). */
+static void write_adjust(PcWr *b, const PcAdjust *a)
+{
+    int k, ch;
+    switch (a->type) {
+    case PC_ADJ_BRIGHTNESS_CONTRAST:
+        wr_i16(b, a->brightness); wr_i16(b, a->contrast);
+        wr_u16be(b, 127); wr_u8(b, 0); wr_u8(b, 0);
+        break;
+    case PC_ADJ_LEVELS: {
+        PcLevels id;
+        PcAdjust dflt;
+        pc_adjust_default(&dflt, PC_ADJ_LEVELS);
+        id = dflt.levels;
+        wr_u16be(b, 2);
+        for (ch = 0; ch < 29; ch++) put_levels(b, ch < 4 ? &a->levels : &id, ch < 4 ? ch : 0);
+        break;
+    }
+    case PC_ADJ_CURVES:
+        wr_u8(b, 0); wr_u16be(b, 1); wr_u32be(b, 0x0F);
+        for (ch = 0; ch < 4; ch++) put_curve_points(b, &a->curves.c[ch]);
+        wr_bytes(b, "Crv ", 4); wr_u16be(b, 4); wr_u32be(b, 4);
+        for (ch = 0; ch < 4; ch++) { wr_u16be(b, (unsigned)ch); put_curve_points(b, &a->curves.c[ch]); }
+        break;
+    case PC_ADJ_COLOR_BALANCE:
+        for (k = 0; k < 9; k++) wr_i16(b, PC_CLAMP(a->balance.v[k / 3][k % 3], -100, 100));
+        wr_u8(b, a->balance.preserve_luminosity ? 1 : 0); wr_u8(b, 0);
+        break;
+    case PC_ADJ_HUE_SAT: {
+        const PcHueSat *h = &a->huesat;
+        wr_u16be(b, 2); wr_u8(b, h->colorize ? 1 : 0); wr_u8(b, 0);
+        if (h->colorize) {
+            int hue = ((h->hue[0] % 360) + 360) % 360;
+            wr_i16(b, hue > 180 ? hue - 360 : hue); wr_i16(b, h->sat[0]); wr_i16(b, h->light[0]);
+            wr_i16(b, 0); wr_i16(b, 0); wr_i16(b, 0);
+        } else {
+            wr_i16(b, 0); wr_i16(b, 25); wr_i16(b, 0);
+            wr_i16(b, h->hue[0]); wr_i16(b, h->sat[0]); wr_i16(b, h->light[0]);
+        }
+        for (k = 1; k <= 6; k++) {
+            int c0 = (k - 1) * 60, j;
+            static const int off[4] = { -45, -15, 15, 45 };   /* Photoshop's default range extents */
+            for (j = 0; j < 4; j++) wr_u16be(b, (unsigned)((c0 + off[j] + 360) % 360));
+            wr_i16(b, h->hue[k]); wr_i16(b, h->sat[k]); wr_i16(b, h->light[k]);
+        }
+        break;
+    }
+    case PC_ADJ_CHANNEL_MIXER:
+        wr_u16be(b, 1); wr_u16be(b, a->mixer_mono ? 1 : 0);
+        for (ch = 0; ch < 4; ch++) {
+            const int *m = a->mixer[ch < 3 ? ch : 0];
+            wr_i16(b, m[0]); wr_i16(b, m[1]); wr_i16(b, m[2]); wr_i16(b, 0); wr_i16(b, m[3]);
+        }
+        break;
+    case PC_ADJ_THRESHOLD: wr_u16be(b, (unsigned)PC_CLAMP(a->threshold, 1, 255)); wr_u16be(b, 0); break;
+    case PC_ADJ_POSTERIZE: wr_u16be(b, (unsigned)PC_CLAMP(a->posterize, 2, 255)); wr_u16be(b, 0); break;
+    default: break;                         /* Invert: no data */
+    }
+    while (b->n % 4) wr_u8(b, 0);
+}
+
 static void write_resource(PcWr *w, unsigned id, const PcWr *data)
 {
     wr_bytes(w, "8BIM", 4);
@@ -1056,8 +1321,9 @@ int pc_psd_save(const PcDoc *d, u8 **out, size_t *outn, char *err, size_t errn)
         const PcLayer *l = d->s.layers[i];
         OutLayer *o = &ol[i];
         int r[4], bg, lw, lh;
-        bg = l->is_background && i == 0 && !pcio_has_alpha(l->pix->px, np);
+        bg = l->pix && l->is_background && i == 0 && !pcio_has_alpha(l->pix->px, np);
         if (bg) { r[0] = 0; r[1] = 0; r[2] = H; r[3] = W; }
+        else if (!l->pix) r[0] = r[1] = r[2] = r[3] = 0;      /* adjustment layer: empty */
         else bbox_where(l->pix->px, 4, 3, W, H, 0, r);
         o->top = r[0]; o->left = r[1]; o->bottom = r[2]; o->right = r[3];
         lw = r[3] - r[1]; lh = r[2] - r[0];
@@ -1153,7 +1419,7 @@ int pc_psd_save(const PcDoc *d, u8 **out, size_t *outn, char *err, size_t errn)
             const PcLayer *l = d->s.layers[i];
             OutLayer *o = &ol[i];
             size_t ex_at, ex_start;
-            int flags = 8;
+            int flags = l->pix ? 8 : 8 | 16;        /* adjustment: pixel data irrelevant */
             wr_u32be(&w, (u32)o->top); wr_u32be(&w, (u32)o->left);
             wr_u32be(&w, (u32)o->bottom); wr_u32be(&w, (u32)o->right);
             wr_u16be(&w, (unsigned)o->nch);
@@ -1197,6 +1463,15 @@ int pc_psd_save(const PcDoc *d, u8 **out, size_t *outn, char *err, size_t errn)
                 wr_bytes(&w, "8BIMlspf", 8);
                 wr_u32be(&w, 4);
                 wr_u32be(&w, (u32)((l->lock_alpha ? 1 : 0) | (l->lock_pixels ? 2 : 0) | (l->lock_position ? 4 : 0)));
+            }
+            /* adjustment layer parameters */
+            if (pc_layer_is_adjust(l)) {
+                sub.n = 0;
+                write_adjust(&sub, &l->adj);
+                wr_bytes(&w, "8BIM", 4);
+                wr_bytes(&w, k_adj_keys[PC_CLAMP(l->adj.type, 0, PC_ADJ_COUNT - 1)], 4);
+                wr_u32be(&w, (u32)sub.n);
+                wr_bytes(&w, sub.p, sub.n);
             }
             /* 'lyid': layer id */
             wr_bytes(&w, "8BIMlyid", 8);
