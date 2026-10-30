@@ -1,0 +1,17 @@
+# PhotoCraft Classic document, 16x16. Original art; MIT OR Apache-2.0. Palette: see README.md.
+..kkkkkkkk......
+..kwwwwwwkk.....
+..kwwwwwwkgk....
+..kwwwwwwkggk...
+..kwwwwwwkkkkk..
+..kwkkkkkkkkgk..
+..kwkCCYYYCkgk..
+..kwkCCwYYCkgk..
+..kwkCwwwYCkgk..
+..kwkddLLLLkgk..
+..kwkLLGGGGkgk..
+..kwkGGGGGGkgk..
+..kwkkkkkkkkgk..
+..kwwwwwwwwwgk..
+..kggggggggggk..
+..kkkkkkkkkkkk..
